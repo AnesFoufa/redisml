@@ -1,9 +1,6 @@
 open Unix
 
 let () =
-  (* You can use print statements as follows for debugging, they'll be visible when running tests. *)
-  Printf.eprintf "Logs from your program will appear here!\n";
-
   (* Create a TCP server socket *)
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;

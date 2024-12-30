@@ -9,5 +9,8 @@ let () =
 
   (* Uncomment this block to pass the first stage *)
   let client_socket, _ = accept server_socket in
+  let response_buff = Bytes.of_string "+PONG\r\n" in
+  let len = Bytes.length response_buff in
+  let _ = write client_socket response_buff 0 len in
   close client_socket;
   close server_socket

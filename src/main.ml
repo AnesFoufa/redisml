@@ -2,8 +2,9 @@ open Unix
 
 let rec handle_client client_fd =
   let out_chan = out_channel_of_descr client_fd in
+  let in_chan = in_channel_of_descr client_fd in
   try
-    let _ = input_line (in_channel_of_descr client_fd) in
+    let _ = input_line in_chan in
     Printf.fprintf out_chan "+PONG\r\n";
     flush out_chan;
     handle_client client_fd

@@ -2,18 +2,15 @@ open Unix
 open Lib
 
 let handle_input_line line state =
-  let ( let* ) = Stdlib.Result.bind in
+  let ( let* ) = Result.bind in
   let* rvalue = Resp.of_string line in
   print_endline (Resp.show rvalue);
   let* command = Command.of_resp rvalue in
-  Stdlib.Ok (Command.handle state command)
+  Ok (Command.handle state command)
 
 let process_line line state =
   let response_or_error = handle_input_line line state in
-  Stdlib.Result.fold
-    ~ok:(fun x -> x)
-    ~error:(fun m -> Resp.RError m)
-    response_or_error
+  Result.fold ~ok:(fun x -> x) ~error:(fun m -> Resp.RError m) response_or_error
 
 let rec handle_client client_fd state =
   let out_chan = out_channel_of_descr client_fd in

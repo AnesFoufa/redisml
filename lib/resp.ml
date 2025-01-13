@@ -6,6 +6,7 @@ type t =
   | RError of string
   | RInteger of int
   | RBulkString of string
+  | NullBulk
 [@@deriving show]
 
 let not_separator c = c <> '\r' && c <> '\n'
@@ -52,5 +53,6 @@ let rec to_string = function
   | RArray elems ->
       Printf.sprintf "*%d\r\n%s" (List.length elems)
         (String.concat "" (List.map to_string elems))
+  | NullBulk -> Printf.sprintf "$-1\r\n"
 
 let of_string = parse_string ~consume:Consume.All resp

@@ -4,6 +4,7 @@ type t =
   | RError of string
   | RInteger of int
   | RBulkString of string
+  | NullBulk
 [@@deriving show]
 
 val to_string : t -> string

@@ -10,6 +10,8 @@ bug-reports: "https://github.com/codecrafters-io/build-your-own-redis/issues"
 depends: [
   "dune" {>= "3.16"}
   "async_unix" {>= "v0.17.0"}
+  "angstrom"
+  "ppx_deriving"
   "odoc" {with-doc}
 ]
 build: [

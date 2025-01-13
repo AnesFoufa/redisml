@@ -13,12 +13,12 @@ set -e # Exit early if any commands fail
 # - Edit this to change how your program compiles locally
 # - Edit .codecrafters/compile.sh to change how your program compiles remotely
 (
-  cd "$(dirname "$0")" # Ensure compile steps are run within the repository directory
-  dune build --build-dir /tmp/codecrafters-build-redis-ocaml
+	cd "$(dirname "$0")" # Ensure compile steps are run within the repository directory
+	dune build --build-dir /tmp/codecrafters-build-redis-ocaml
 )
 
 # Copied from .codecrafters/run.sh
 #
 # - Edit this to change how your program runs locally
 # - Edit .codecrafters/run.sh to change how your program runs remotely
-exec /tmp/codecrafters-build-redis-ocaml/default/main.exe "$@"
+exec /tmp/codecrafters-build-redis-ocaml/default/bin/main.exe "$@"

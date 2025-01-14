@@ -41,7 +41,7 @@ let rec accept_socket_and_handle_client pool server_socket state =
   accept_socket_and_handle_client pool server_socket state
 
 let () =
-  let state = Hashtbl.create 256 in
+  let state = Command.init_state () in
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));

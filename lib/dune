@@ -1,5 +1,5 @@
 (library
  (name lib)
  (preprocess (pps ppx_deriving.show))
- (libraries angstrom base)
+ (libraries angstrom base unix)
  (modules resp command))

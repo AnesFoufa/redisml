@@ -1,5 +1,11 @@
-type t = Ping | Echo of string | Get of string | Set of (string * Resp.t)
-type state = (string, Resp.t) Hashtbl.t
+type t =
+  | Ping
+  | Echo of string
+  | Get of string
+  | Set of { key : string; value : Resp.t; duration : int option }
+
+type record = { value : Resp.t; created_at : int; duration : int option }
+type state = (string, record) Hashtbl.t
 
 let of_resp = function
   | Resp.RArray [ Resp.RBulkString ping ]
@@ -13,13 +19,38 @@ let of_resp = function
       Ok (Get key)
   | Resp.RArray [ Resp.RBulkString set; Resp.RBulkString key; value ]
     when set |> String.uppercase_ascii |> String.equal "SET" ->
-      Ok (Set (key, value))
+      Ok (Set { key; value; duration = None })
+  | Resp.RArray
+      [
+        Resp.RBulkString set;
+        Resp.RBulkString key;
+        value;
+        RBulkString px;
+        RBulkString duration;
+      ]
+    when set |> String.uppercase_ascii |> String.equal "SET"
+         && px |> String.uppercase_ascii |> String.equal "PX" ->
+      Ok (Set { key; value; duration = int_of_string_opt duration })
   | _ -> Error "Unknown command"
 
-let handle state = function
+let get_value now = function
+  | { value; created_at = _created_at; duration = None } -> value
+  | { value; created_at; duration = Some duration }
+    when created_at + duration >= now ->
+      value
+  | _ -> Resp.NullBulk
+
+let handle (state : state) = function
   | Ping -> Resp.RString "PONG"
   | Echo something -> Resp.RBulkString something
-  | Get key -> Hashtbl.find_opt state key |> Option.value ~default:Resp.NullBulk
-  | Set (key, value) ->
-      Hashtbl.add state key value;
+  | Get key ->
+      let now = Unix.gettimeofday () *. 1000. |> Float.to_int in
+      Hashtbl.find_opt state key
+      |> Option.map (get_value now)
+      |> Option.value ~default:Resp.NullBulk
+  | Set { key; value; duration } ->
+      let created_at = Unix.gettimeofday () *. 1000. |> Float.to_int in
+      Hashtbl.add state key { value; created_at; duration };
       RString "OK"
+
+let init_state () = Hashtbl.create 256

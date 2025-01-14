@@ -40,16 +40,18 @@ let get_value now = function
       value
   | _ -> Resp.NullBulk
 
-let handle (state : state) = function
+let now () = Unix.gettimeofday () *. 1000. |> Float.to_int
+
+let handle state = function
   | Ping -> Resp.RString "PONG"
   | Echo something -> Resp.RBulkString something
   | Get key ->
-      let now = Unix.gettimeofday () *. 1000. |> Float.to_int in
+      let now = now () in
       Hashtbl.find_opt state key
       |> Option.map (get_value now)
       |> Option.value ~default:Resp.NullBulk
   | Set { key; value; duration } ->
-      let created_at = Unix.gettimeofday () *. 1000. |> Float.to_int in
+      let created_at = now () in
       Hashtbl.add state key { value; created_at; duration };
       RString "OK"
 

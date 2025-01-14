@@ -5,7 +5,7 @@ type t =
   | RInteger of int
   | RBulkString of string
   | NullBulk
-[@@deriving show]
+[@@deriving show, eq]
 
 val to_string : t -> string
 val of_string : string -> (t, string) Stdlib.result

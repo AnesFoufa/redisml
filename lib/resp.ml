@@ -7,7 +7,7 @@ type t =
   | RInteger of int
   | RBulkString of string
   | NullBulk
-[@@deriving show]
+[@@deriving show, eq]
 
 let not_separator c = c <> '\r' && c <> '\n'
 let string_without_separator = take_while1 not_separator

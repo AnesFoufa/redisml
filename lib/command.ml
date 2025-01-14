@@ -47,9 +47,13 @@ let handle state = function
   | Echo something -> Resp.RBulkString something
   | Get key ->
       let now = now () in
-      Hashtbl.find_opt state key
-      |> Option.map (get_value now)
-      |> Option.value ~default:Resp.NullBulk
+      let res =
+        Hashtbl.find_opt state key
+        |> Option.map (get_value now)
+        |> Option.value ~default:Resp.NullBulk
+      in
+      if Resp.equal res Resp.NullBulk then Hashtbl.remove state key else ();
+      res
   | Set { key; value; duration } ->
       let created_at = now () in
       Hashtbl.add state key { value; created_at; duration };

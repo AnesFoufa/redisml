@@ -43,7 +43,7 @@ let rec accept_socket_and_handle_client pool server_socket state =
 let usage_message = "--dir <directory> --dbfilename <file>"
 let dbfilename = ref ""
 let dir = ref ""
-let anon_param _param = ()
+let anon_fun _arg = ()
 
 let specs =
   [
@@ -57,7 +57,7 @@ let specs =
   ]
 
 let () =
-  Arg.parse specs anon_param usage_message;
+  Arg.parse specs anon_fun usage_message;
   let state = Command.init_state ~dbfilename:!dbfilename ~dir:!dir in
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;

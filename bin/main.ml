@@ -40,7 +40,7 @@ let rec accept_socket_and_handle_client pool server_socket state =
   let _ = Thread_pool.add_work pool work in
   accept_socket_and_handle_client pool server_socket state
 
-let usage_message = "whatever"
+let usage_message = "--dir <directory> --dbfilename <file>"
 let dbfilename = ref ""
 let dir = ref ""
 let anon_param _param = ()

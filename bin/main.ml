@@ -40,8 +40,25 @@ let rec accept_socket_and_handle_client pool server_socket state =
   let _ = Thread_pool.add_work pool work in
   accept_socket_and_handle_client pool server_socket state
 
+let usage_message = "whatever"
+let dbfilename = ref ""
+let dir = ref ""
+let anon_param _param = ()
+
+let specs =
+  [
+    ( "--dir",
+      Arg.Set_string dir,
+      "the path to the directory where the RDB file is stored (example: \
+       /tmp/redis-data)" );
+    ( "--dbfilename",
+      Arg.Set_string dbfilename,
+      "the name of the RDB file (example: rdbfile)" );
+  ]
+
 let () =
-  let state = Command.init_state () in
+  Arg.parse specs anon_param usage_message;
+  let state = Command.init_state ~dbfilename:!dbfilename ~dir:!dir in
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));

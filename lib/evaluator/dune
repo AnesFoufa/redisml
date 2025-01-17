@@ -1,0 +1,7 @@
+(library
+ (name evaluator)
+ (libraries resp)
+ (modules evaluator command )
+ (private_modules command)
+ )
+

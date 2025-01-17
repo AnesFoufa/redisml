@@ -6,5 +6,6 @@ type t = private
   | Config_get_dir
   | Config_get_dbfilename
   | Keys
+  | Select of int
 
 val of_resp : Resp.t -> (t, string) Stdlib.result

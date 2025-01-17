@@ -37,16 +37,17 @@ let rec repl client_fd evaluator =
     repl client_fd evaluator
   with End_of_file -> ()
 
-let rec accept_socket_and_repl pool server_socket evaluator =
+let rec accept_socket_and_repl pool server_socket databases =
   let client_socket, _ = accept server_socket in
   let work () =
+    let evaluator = Evaluator.init databases in
     print_endline "New client";
     repl client_socket evaluator;
     close client_socket;
     print_endline "Client left"
   in
   let _ = Thread_pool.add_work pool work in
-  accept_socket_and_repl pool server_socket evaluator
+  accept_socket_and_repl pool server_socket databases
 
 let usage_message = "--dir <directory> --dbfilename <file>"
 let dbfilename = ref ""
@@ -70,6 +71,6 @@ let () =
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
   listen server_socket 1;
-  let evaluator = Evaluator.init ~dbfilename:!dbfilename ~dir:!dir in
+  let databases = Databases.init ~dbfilename:!dbfilename ~dir:!dir in
   let pool = Thread_pool.create ~max_num_threads:4 () |> Core.ok_exn in
-  accept_socket_and_repl pool server_socket evaluator
+  accept_socket_and_repl pool server_socket databases

@@ -6,6 +6,7 @@ type t =
   | Config_get_dir
   | Config_get_dbfilename
   | Keys
+  | Select of int
 
 let of_resp = function
   | Resp.RArray [ Resp.RBulkString ping ]
@@ -43,4 +44,10 @@ let of_resp = function
   | Resp.RArray [ RBulkString keys; RBulkString "*" ]
     when keys |> String.uppercase_ascii |> String.equal "KEYS" ->
       Ok Keys
+  | RArray [ RBulkString select; RBulkString index ]
+    when select |> String.uppercase_ascii |> String.equal "SELECT" ->
+      int_of_string_opt index
+      |> Option.fold ~none:(Error "Expected a positive integer") ~some:(fun i ->
+             if i >= 0 then Ok (Select i)
+             else Error "Expected a positive integer")
   | _ -> Error "Unknown command"

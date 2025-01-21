@@ -4,7 +4,7 @@ let evaluate line evaluator ~now =
   let response_res =
     let ( let* ) = Result.bind in
     let* rvalue = Resp.of_string line in
-    Ok (Evaluator.evaluate evaluator ~now rvalue)
+    Ok (Client.evaluate evaluator ~now rvalue)
   in
   let response_resp =
     match response_res with Ok response -> response | Error m -> Resp.RError m
@@ -40,7 +40,7 @@ let rec repl client_fd evaluator =
 let rec accept_socket_and_repl pool server_socket databases =
   let client_socket, _ = accept server_socket in
   let work () =
-    let evaluator = Evaluator.init databases in
+    let evaluator = Client.init databases in
     print_endline "New client";
     repl client_socket evaluator;
     close client_socket;

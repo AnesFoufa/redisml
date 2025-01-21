@@ -7,6 +7,7 @@ val get_database : t -> int -> database
 val set_database : t -> int -> unit
 val get_dir : t -> string
 val get_dbfilename : t -> string
+val get_metadata : t -> (string, string) Hashtbl.t
 
 module RDB : sig
   val milliseconds_expire : Int64.t Angstrom.t

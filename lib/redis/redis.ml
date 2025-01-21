@@ -9,6 +9,8 @@ type t = {
   config : config;
 }
 
+let get_metadata redis = redis.metadata
+
 module RDB = struct
   open Angstrom
 

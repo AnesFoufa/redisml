@@ -1,7 +1,7 @@
 (library
- (name evaluator)
+ (name client)
  (libraries resp redis)
- (modules evaluator command )
+ (modules client command )
  (private_modules command)
  )
 

@@ -1,6 +1,6 @@
 (library
  (name evaluator)
- (libraries resp databases)
+ (libraries resp redis)
  (modules evaluator command )
  (private_modules command)
  )

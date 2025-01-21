@@ -1,17 +1,17 @@
 [@@@warning "-27"]
 
-type t = { mutable current_index : int; databases : Databases.t }
+type t = { mutable current_index : int; databases : Redis.t }
 
 let init databases = { current_index = 0; databases }
 
-let get_value now (record : Databases.record) =
+let get_value now (record : Redis.record) =
   match record with
   | { value; expire = None } -> value
   | { value; expire = Some timestamp } when timestamp >= now -> value
   | _ -> Resp.NullBulk
 
 let get_database evaluator =
-  Databases.get_database evaluator.databases evaluator.current_index
+  Redis.get_database evaluator.databases evaluator.current_index
 
 let evaluate_command evaluator ~now command =
   let open Command in
@@ -35,14 +35,12 @@ let evaluate_command evaluator ~now command =
       RString "OK"
   | Config_get_dir ->
       Resp.RArray
-        [
-          RBulkString "dir"; RBulkString (Databases.get_dir evaluator.databases);
-        ]
+        [ RBulkString "dir"; RBulkString (Redis.get_dir evaluator.databases) ]
   | Config_get_dbfilename ->
       Resp.RArray
         [
           RBulkString "dbfilename";
-          RBulkString (Databases.get_dbfilename evaluator.databases);
+          RBulkString (Redis.get_dbfilename evaluator.databases);
         ]
   | Keys ->
       let database = get_database evaluator in

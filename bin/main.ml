@@ -71,6 +71,6 @@ let () =
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
   listen server_socket 1;
-  let databases = Databases.init ~dbfilename:!dbfilename ~dir:!dir in
+  let databases = Redis.init ~dbfilename:!dbfilename ~dir:!dir in
   let pool = Thread_pool.create ~max_num_threads:4 () |> Core.ok_exn in
   accept_socket_and_repl pool server_socket databases

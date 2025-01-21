@@ -1,6 +1,6 @@
 (library
- (name databases)
+ (name redis)
  (libraries resp angstrom)
- (modules databases )
+ (modules redis )
  )
 

@@ -1,5 +1,3 @@
-[@@@warning "-27-69-32"]
-
 type config = { dir : string; dbfilename : string }
 type record = { value : Resp.t; expire : Int64.t option }
 type database = (string, record) Hashtbl.t
@@ -71,14 +69,14 @@ module RDB = struct
     subsections |> List.to_seq |> Hashtbl.of_seq |> return
 
   let milliseconds_expire =
-    let* milliseconds_indicator = char '\252' in
+    let* _milliseconds_indicator = char '\252' in
     let* expire_timestamp_little_endian = take 8 in
     let buffer = Bytes.of_string expire_timestamp_little_endian in
     let timestamp = Bytes.get_int64_le buffer 0 in
     return timestamp
 
   let seconds_expire =
-    let* seconds_indicator = char '\xFD' in
+    let* _seconds_indicator = char '\xFD' in
     let* expire_timestamp_little_endian = take 4 in
     let buffer = Bytes.of_string expire_timestamp_little_endian in
     let timestamp =
@@ -103,8 +101,8 @@ module RDB = struct
     match index with
     | Size i ->
         let* _table_size_indicator = char '\251' in
-        let* database_size = rdb_size in
-        let* nb_expiring_keys = rdb_size in
+        let* _database_size = rdb_size in
+        let* _nb_expiring_keys = rdb_size in
         let* keys_and_records = many key_and_record in
         return (i, keys_and_records |> List.to_seq |> Hashtbl.of_seq)
     | _ -> failwith "Not implemented"
@@ -137,7 +135,7 @@ let init ~dbfilename ~dir =
     let content = Bytes.sub_string buf 0 nb_read in
     match RDB.of_string content with
     | Ok (metadata, databases) -> { metadata; databases; config }
-    | Error err -> raise UnparsedRDB
+    | Error _err -> raise UnparsedRDB
   with Sys_error _ | UnparsedRDB ->
     let database = Hashtbl.create 256 in
     let databases = Hashtbl.create 16 in

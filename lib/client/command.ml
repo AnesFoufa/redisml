@@ -7,6 +7,7 @@ type t =
   | Config_get_dbfilename
   | Keys
   | Select of int
+  | Info_replication
 
 let of_resp = function
   | Resp.RArray [ Resp.RBulkString ping ]
@@ -50,4 +51,7 @@ let of_resp = function
       |> Option.fold ~none:(Error "Expected a positive integer") ~some:(fun i ->
              if i >= 0 then Ok (Select i)
              else Error "Expected a positive integer")
+  | RArray [ RBulkString info; RBulkString "replication" ]
+    when info |> String.uppercase_ascii |> String.equal "INFO" ->
+      Ok Info_replication
   | _ -> Error "Unknown command"

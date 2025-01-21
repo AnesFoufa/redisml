@@ -50,7 +50,7 @@ let evaluate_command evaluator ~now command =
   | Select i ->
       evaluator.current_index <- i;
       RString "OK"
-  | Info_replication -> RBulkString "# Replication\n\rrole:master"
+  | Info -> RBulkString "role:master"
 
 let evaluate evaluator ~now input =
   let response_res =

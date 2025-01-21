@@ -1,10 +1,9 @@
-[@@@warning "-27"]
-
 type t = { mutable current_index : int; databases : Redis.t }
 
 let init databases = { current_index = 0; databases }
 
-let get_value now (record : Redis.record) =
+let get_value now record =
+  let open Redis.Database in
   match record with
   | { value; expire = None } -> value
   | { value; expire = Some timestamp } when timestamp >= now -> value

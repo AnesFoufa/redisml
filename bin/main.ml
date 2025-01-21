@@ -52,6 +52,7 @@ let rec accept_socket_and_repl pool server_socket databases =
 let usage_message = "--dir <directory> --dbfilename <file>"
 let dbfilename = ref ""
 let dir = ref ""
+let port = ref 6379
 let anon_fun _arg = ()
 
 let specs =
@@ -63,13 +64,14 @@ let specs =
     ( "--dbfilename",
       Arg.Set_string dbfilename,
       "the name of the RDB file (example: rdbfile)" );
+    ("--port", Arg.Set_int port, "port number");
   ]
 
 let () =
   Arg.parse specs anon_fun usage_message;
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
-  bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", 6379));
+  bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", !port));
   listen server_socket 1;
   let databases = Redis.init ~dbfilename:!dbfilename ~dir:!dir in
   let pool = Thread_pool.create ~max_num_threads:4 () |> Core.ok_exn in

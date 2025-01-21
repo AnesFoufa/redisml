@@ -1,13 +1,13 @@
+[@@@warning "-27"]
+
 type t = { mutable current_index : int; databases : Databases.t }
 
 let init databases = { current_index = 0; databases }
 
 let get_value now (record : Databases.record) =
   match record with
-  | { value; created_at = _created_at; duration = None } -> value
-  | { value; created_at; duration = Some duration }
-    when created_at + duration >= now ->
-      value
+  | { value; expire = None } -> value
+  | { value; expire = Some timestamp } when timestamp >= now -> value
   | _ -> Resp.NullBulk
 
 let get_database evaluator =
@@ -29,9 +29,9 @@ let evaluate_command evaluator ~now command =
       res
   | Set { key; value; duration } ->
       let database = get_database evaluator in
-      let created_at = now in
+      let expire = duration |> Option.map (fun t -> Int64.add t now) in
       Hashtbl.remove database key;
-      Hashtbl.add database key { value; created_at; duration };
+      Hashtbl.add database key { value; expire };
       RString "OK"
   | Config_get_dir ->
       Resp.RArray

@@ -11,7 +11,7 @@ let evaluate line evaluator ~now =
   in
   Resp.to_string response_resp
 
-let now () = Unix.gettimeofday () *. 1000. |> Float.to_int
+let now () = Unix.gettimeofday () *. 1000. |> Int64.of_float
 
 let read client_fd =
   let in_chan = in_channel_of_descr client_fd in

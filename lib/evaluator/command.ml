@@ -2,7 +2,7 @@ type t =
   | Ping
   | Echo of string
   | Get of string
-  | Set of { key : string; value : Resp.t; duration : int option }
+  | Set of { key : string; value : Resp.t; duration : Int64.t option }
   | Config_get_dir
   | Config_get_dbfilename
   | Keys
@@ -31,7 +31,7 @@ let of_resp = function
       ]
     when set |> String.uppercase_ascii |> String.equal "SET"
          && px |> String.uppercase_ascii |> String.equal "PX" ->
-      Ok (Set { key; value; duration = int_of_string_opt duration })
+      Ok (Set { key; value; duration = Int64.of_string_opt duration })
   | Resp.RArray [ RBulkString config; RBulkString get; RBulkString "dir" ]
     when get |> String.uppercase_ascii |> String.equal "GET"
          && config |> String.uppercase_ascii |> String.equal "CONFIG" ->

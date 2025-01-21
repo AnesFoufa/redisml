@@ -1,6 +1,6 @@
-type t = { mutable current_index : int; databases : Redis.t }
+type t = { mutable current_index : int; redis : Redis.t }
 
-let init databases = { current_index = 0; databases }
+let init redis = { current_index = 0; redis }
 
 let get_value now record =
   let open Redis.Database in
@@ -9,16 +9,15 @@ let get_value now record =
   | { value; expire = Some timestamp } when timestamp >= now -> value
   | _ -> Resp.NullBulk
 
-let get_database evaluator =
-  Redis.get_database evaluator.databases evaluator.current_index
+let get_database client = Redis.get_database client.redis client.current_index
 
-let evaluate_command evaluator ~now command =
+let evaluate_command client ~now command =
   let open Command in
   match command with
   | Ping -> Resp.RString "PONG"
   | Echo something -> Resp.RBulkString something
   | Get key ->
-      let database = get_database evaluator in
+      let database = get_database client in
       let res =
         Hashtbl.find_opt database key
         |> Option.map (get_value now)
@@ -27,36 +26,43 @@ let evaluate_command evaluator ~now command =
       if Resp.equal res Resp.NullBulk then Hashtbl.remove database key else ();
       res
   | Set { key; value; duration } ->
-      let database = get_database evaluator in
+      let database = get_database client in
       let expire = duration |> Option.map (fun t -> Int64.add t now) in
       Hashtbl.remove database key;
       Hashtbl.add database key { value; expire };
       RString "OK"
   | Config_get_dir ->
       Resp.RArray
-        [ RBulkString "dir"; RBulkString (Redis.get_dir evaluator.databases) ]
+        [ RBulkString "dir"; RBulkString (Redis.get_dir client.redis) ]
   | Config_get_dbfilename ->
       Resp.RArray
         [
           RBulkString "dbfilename";
-          RBulkString (Redis.get_dbfilename evaluator.databases);
+          RBulkString (Redis.get_dbfilename client.redis);
         ]
   | Keys ->
-      let database = get_database evaluator in
+      let database = get_database client in
       RArray
         (database |> Hashtbl.to_seq_keys
         |> Seq.map (fun x -> Resp.RBulkString x)
         |> List.of_seq)
   | Select i ->
-      evaluator.current_index <- i;
+      client.current_index <- i;
       RString "OK"
-  | Info_replication -> RBulkString "# Replication\n\rrole:master"
+  | Info_replication ->
+      let role =
+        match Redis.get_replication_role client.redis with
+        | Redis.Master -> "master"
+        | Slave _ -> "slave"
+      in
+      let response = Printf.sprintf "#Replication\n\rrole:%s" role in
+      RBulkString response
 
-let evaluate evaluator ~now input =
+let evaluate client ~now input =
   let response_res =
     let ( let* ) = Result.bind in
     let* command = Command.of_resp input in
-    let response = evaluate_command evaluator ~now command in
+    let response = evaluate_command client ~now command in
     Result.Ok response
   in
   match response_res with

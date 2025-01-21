@@ -37,22 +37,26 @@ let rec repl client_fd evaluator =
     repl client_fd evaluator
   with End_of_file -> ()
 
-let rec accept_socket_and_repl pool server_socket databases =
+let rec accept_socket_and_repl pool server_socket redis =
   let client_socket, _ = accept server_socket in
   let work () =
-    let evaluator = Client.init databases in
+    let evaluator = Client.init redis in
     print_endline "New client";
     repl client_socket evaluator;
     close client_socket;
     print_endline "Client left"
   in
   let _ = Thread_pool.add_work pool work in
-  accept_socket_and_repl pool server_socket databases
+  accept_socket_and_repl pool server_socket redis
 
-let usage_message = "--dir <directory> --dbfilename <file>"
+let usage_message =
+  "--dir <directory> --dbfilename <file> --port <port> --replicaof <MASTER \
+   HOST> <MASTER PORT>"
+
 let dbfilename = ref ""
 let dir = ref ""
 let port = ref 6379
+let replicaof = ref ""
 let anon_fun _arg = ()
 
 let specs =
@@ -65,14 +69,41 @@ let specs =
       Arg.Set_string dbfilename,
       "the name of the RDB file (example: rdbfile)" );
     ("--port", Arg.Set_int port, "port number");
+    ( "--replicaof",
+      Arg.Set_string replicaof,
+      "master's host and port specified by space, Example --replicaof \
+       localhost 6397" );
   ]
 
+let parse_host_and_port replicaof =
+  let open Angstrom in
+  let host_and_port =
+    let* host = take_till (Char.equal ' ') in
+    let* _ = many1 (char ' ') in
+    let* port = take_while (fun _c -> true) in
+    match int_of_string_opt port with
+    | Some p -> return (host, p)
+    | None -> fail "expected a valid port number"
+  in
+  parse_string ~consume:Consume.All host_and_port replicaof
+
 let () =
+  let open Redis in
   Arg.parse specs anon_fun usage_message;
   let server_socket = socket PF_INET SOCK_STREAM 0 in
+  let replication_role =
+    if !replicaof |> String.equal "" then Master
+    else
+      match parse_host_and_port !replicaof with
+      | Ok (host, port) ->
+          Redis.Slave { master_host = host; master_port = port }
+      | Error err ->
+          Printf.sprintf "%s %s" "Incorrect replicaof parameter:" err
+          |> failwith
+  in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", !port));
   listen server_socket 1;
-  let databases = Redis.init ~dbfilename:!dbfilename ~dir:!dir in
+  let redis = init ~replication_role ~dbfilename:!dbfilename ~dir:!dir () in
   let pool = Thread_pool.create ~max_num_threads:4 () |> Core.ok_exn in
-  accept_socket_and_repl pool server_socket databases
+  accept_socket_and_repl pool server_socket redis

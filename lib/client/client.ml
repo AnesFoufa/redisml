@@ -61,6 +61,12 @@ let evaluate_command client ~now command =
       let response_with_header = Printf.sprintf "#Replication\n\r%s" response in
       RBulkString response_with_header
   | Repl_conf -> RString "OK"
+  | Psync -> (
+      let open Redis in
+      match get_replication_role client.redis with
+      | Master { replid; repl_offset } ->
+          RString (Printf.sprintf "FULLRESYNC %s %d" replid repl_offset)
+      | Slave _ -> RError "Can't be handled by a slave")
 
 let evaluate client ~now input =
   let response_res =

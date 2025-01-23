@@ -9,5 +9,6 @@ type t = private
   | Select of int
   | Info_replication
   | Repl_conf
+  | Psync
 
 val of_resp : Resp.t -> (t, string) Stdlib.result

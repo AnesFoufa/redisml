@@ -117,6 +117,9 @@ let handshake_master master_host master_port slave_port =
     (Resp.RArray
        [ RBulkString "REPLCONF"; RBulkString "capa"; RBulkString "psync2" ])
     client_socket;
+  write_command
+    (Resp.RArray [ RBulkString "PSYNC"; RBulkString "?"; RBulkString "-1" ])
+    client_socket;
   close client_socket
 
 let () =

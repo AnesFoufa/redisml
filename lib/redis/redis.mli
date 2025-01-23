@@ -1,11 +1,13 @@
 type t
 
 type replication_role =
-  | Master
+  | Master of { replid : string; repl_offset : int }
   | Slave of { master_host : string; master_port : int }
 
+val master : replication_role
+
 val init :
-  ?replication_role:replication_role ->
+  replication_role:replication_role ->
   dbfilename:string ->
   dir:string ->
   unit ->

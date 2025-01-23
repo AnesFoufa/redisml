@@ -92,7 +92,7 @@ let () =
   Arg.parse specs anon_fun usage_message;
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   let replication_role =
-    if !replicaof |> String.equal "" then Master
+    if !replicaof |> String.equal "" then master
     else
       match parse_host_and_port !replicaof with
       | Ok (host, port) ->

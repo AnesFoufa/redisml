@@ -50,13 +50,16 @@ let evaluate_command client ~now command =
       client.current_index <- i;
       RString "OK"
   | Info_replication ->
-      let role =
+      let response =
         match Redis.get_replication_role client.redis with
-        | Redis.Master -> "master"
-        | Slave _ -> "slave"
+        | Redis.Master { replid; repl_offset } ->
+            Printf.sprintf
+              "role:master\n\rmaster_replid:%s\n\rmaster_repl_offset:%d" replid
+              repl_offset
+        | Slave _ -> "role:slave"
       in
-      let response = Printf.sprintf "#Replication\n\rrole:%s" role in
-      RBulkString response
+      let response_with_header = Printf.sprintf "#Replication\n\r%s" response in
+      RBulkString response_with_header
 
 let evaluate client ~now input =
   let response_res =

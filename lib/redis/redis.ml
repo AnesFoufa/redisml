@@ -1,5 +1,5 @@
 type replication_role =
-  | Master
+  | Master of { replid : string; repl_offset : int }
   | Slave of { master_host : string; master_port : int }
 
 type config = {
@@ -12,11 +12,15 @@ type t = { metadata : Rdb.metadata; databases : Rdb.databases; config : config }
 
 module Database = Database
 
+let master =
+  Master
+    { replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"; repl_offset = 0 }
+
 let get_metadata redis name = Hashtbl.find_opt redis.metadata name
 
 exception UnparsedRDB
 
-let init ?(replication_role = Master) ~dbfilename ~dir () =
+let init ~replication_role ~dbfilename ~dir () =
   let file_path = Filename.concat dir dbfilename in
   let config = { dir; dbfilename; replication_role } in
   try

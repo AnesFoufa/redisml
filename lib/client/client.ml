@@ -60,6 +60,7 @@ let evaluate_command client ~now command =
       in
       let response_with_header = Printf.sprintf "#Replication\n\r%s" response in
       RBulkString response_with_header
+  | Repl_conf -> RString "OK"
 
 let evaluate client ~now input =
   let response_res =

@@ -8,6 +8,7 @@ type t =
   | Keys
   | Select of int
   | Info_replication
+  | Repl_conf
 
 let of_resp = function
   | Resp.RArray [ Resp.RBulkString ping ]
@@ -54,4 +55,7 @@ let of_resp = function
   | RArray [ RBulkString info; RBulkString "replication" ]
     when info |> String.uppercase_ascii |> String.equal "INFO" ->
       Ok Info_replication
+  | RArray (RBulkString repl_conf :: _)
+    when repl_conf |> String.uppercase_ascii |> String.equal "REPLCONF" ->
+      Ok Repl_conf
   | _ -> Error "Unknown command"

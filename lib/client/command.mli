@@ -8,5 +8,6 @@ type t = private
   | Keys
   | Select of int
   | Info_replication
+  | Repl_conf
 
 val of_resp : Resp.t -> (t, string) Stdlib.result

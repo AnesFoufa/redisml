@@ -87,7 +87,15 @@ let parse_host_and_port replicaof =
   in
   parse_string ~consume:Consume.All host_and_port replicaof
 
-let handshake_master master_host master_port =
+let write_command command socket =
+  let message = command |> Resp.to_string |> Bytes.of_string in
+  let _ = write socket message 0 (Bytes.length message) in
+  let buffer = Bytes.create 1024 in
+  let bytes_read = Unix.read socket buffer 0 1024 in
+  let _response = Bytes.sub_string buffer 0 bytes_read in
+  ()
+
+let handshake_master master_host master_port slave_port =
   let client_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt client_socket SO_REUSEADDR true;
   let inet_addr =
@@ -96,10 +104,19 @@ let handshake_master master_host master_port =
   in
   let sockaddr = ADDR_INET (inet_addr, master_port) in
   connect client_socket sockaddr;
-  let message =
-    Resp.RArray [ Resp.RBulkString "PING" ] |> Resp.to_string |> Bytes.of_string
-  in
-  let _ = write client_socket message 0 (Bytes.length message) in
+  write_command (Resp.RArray [ Resp.RBulkString "PING" ]) client_socket;
+  write_command
+    (Resp.RArray
+       [
+         RBulkString "REPLCONF";
+         RBulkString "listening-port";
+         RBulkString (string_of_int slave_port);
+       ])
+    client_socket;
+  write_command
+    (Resp.RArray
+       [ RBulkString "REPLCONF"; RBulkString "capa"; RBulkString "psync2" ])
+    client_socket;
   close client_socket
 
 let () =
@@ -118,7 +135,7 @@ let () =
   let () =
     match replication_role with
     | Slave { master_host; master_port } ->
-        handshake_master master_host master_port
+        handshake_master master_host master_port !port
     | Master _ -> ()
   in
   let server_socket = socket PF_INET SOCK_STREAM 0 in

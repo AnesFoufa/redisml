@@ -87,10 +87,24 @@ let parse_host_and_port replicaof =
   in
   parse_string ~consume:Consume.All host_and_port replicaof
 
+let handshake_master master_host master_port =
+  let client_socket = socket PF_INET SOCK_STREAM 0 in
+  setsockopt client_socket SO_REUSEADDR true;
+  let inet_addr =
+    if master_host = "localhost" then inet_addr_loopback
+    else inet_addr_of_string master_host
+  in
+  let sockaddr = ADDR_INET (inet_addr, master_port) in
+  connect client_socket sockaddr;
+  let message =
+    Resp.RArray [ Resp.RBulkString "PING" ] |> Resp.to_string |> Bytes.of_string
+  in
+  let _ = write client_socket message 0 (Bytes.length message) in
+  close client_socket
+
 let () =
   let open Redis in
   Arg.parse specs anon_fun usage_message;
-  let server_socket = socket PF_INET SOCK_STREAM 0 in
   let replication_role =
     if !replicaof |> String.equal "" then master
     else
@@ -101,6 +115,13 @@ let () =
           Printf.sprintf "%s %s" "Incorrect replicaof parameter:" err
           |> failwith
   in
+  let () =
+    match replication_role with
+    | Slave { master_host; master_port } ->
+        handshake_master master_host master_port
+    | Master _ -> ()
+  in
+  let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", !port));
   listen server_socket 1;

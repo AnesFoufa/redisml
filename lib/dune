@@ -1,5 +1,5 @@
 (library
  (name lib)
- (libraries resp client redis)
+ (libraries resp client redis slave_client)
  )
 

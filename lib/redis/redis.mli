@@ -13,11 +13,27 @@ val init :
   unit ->
   t
 
-val get_database : t -> int -> Database.t
-val set_database : t -> int -> unit
-val get_dir : t -> string
-val get_dbfilename : t -> string
-val get_replication_role : t -> replication_role
 val get_metadata : t -> string -> string option
 
-module Database = Database
+module Command : sig
+  type t =
+    | Ping
+    | Echo of string
+    | Get of { index : int; key : string; now : Int64.t }
+    | Set of {
+        index : int;
+        key : string;
+        value : Resp.t;
+        duration : Int64.t option;
+        now : Int64.t;
+      }
+    | Keys of { index : int; now : Int64.t }
+    | Config_get_dir
+    | Config_get_dbfilename
+    | Info_replication
+    | Repl_conf
+    | Psync
+    | Select of int
+end
+
+val handle_command : t -> Command.t -> Resp.t

@@ -28,13 +28,13 @@ let print client_fd response_line =
   Printf.fprintf out_chan "%s" response_line;
   flush out_chan
 
-let rec repl client_fd evaluator =
+let rec repl client_fd redis evaluator =
   try
     let line = read client_fd in
     let now = now () in
     let response = evaluate line evaluator ~now in
     print client_fd response;
-    repl client_fd evaluator
+    repl client_fd redis evaluator
   with End_of_file -> ()
 
 let rec accept_socket_and_repl pool server_socket redis =
@@ -42,7 +42,7 @@ let rec accept_socket_and_repl pool server_socket redis =
   let work () =
     let evaluator = Client.init redis in
     print_endline "New client";
-    repl client_socket evaluator;
+    repl client_socket redis evaluator;
     close client_socket;
     print_endline "Client left"
   in

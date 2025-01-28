@@ -2,44 +2,6 @@ type replication_role =
   | Master of { replid : string; repl_offset : int }
   | Slave of { master_host : string; master_port : int }
 
-type config = {
-  dir : string;
-  dbfilename : string;
-  replication_role : replication_role;
-}
-
-type t = { metadata : Rdb.metadata; databases : Rdb.databases; config : config }
-
-module Database = Database
-
-let master =
-  Master
-    { replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"; repl_offset = 0 }
-
-let get_metadata redis name = Hashtbl.find_opt redis.metadata name
-
-exception UnparsedRDB
-
-let init ~replication_role ~dbfilename ~dir () =
-  let file_path = Filename.concat dir dbfilename in
-  let config = { dir; dbfilename; replication_role } in
-  try
-    let ic = open_in file_path in
-    let buf = Bytes.create 2048 in
-    let nb_read = input ic buf 0 2048 in
-    let content = Bytes.sub_string buf 0 nb_read in
-    match Rdb.of_string content with
-    | Ok (metadata, databases) -> { metadata; databases; config }
-    | Error _err -> raise UnparsedRDB
-  with Sys_error _ | UnparsedRDB ->
-    let database = Hashtbl.create 256 in
-    let databases = Hashtbl.create 16 in
-    Hashtbl.add databases 0 database;
-    let metadata = Hashtbl.create 32 in
-    { metadata; databases; config }
-
-let get_replication_role redis = redis.config.replication_role
-
 module Command = struct
   type t =
     | Ping
@@ -60,6 +22,27 @@ module Command = struct
     | Psync
     | Select of int
 end
+
+type config = {
+  dir : string;
+  dbfilename : string;
+  replication_role : replication_role;
+}
+
+type t = {
+  metadata : Rdb.metadata;
+  databases : Rdb.databases;
+  config : config;
+  in_chan : (Command.t * Resp.t Event.channel) Event.channel;
+}
+
+module Database = Database
+
+let master =
+  Master
+    { replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"; repl_offset = 0 }
+
+let get_metadata redis name = Hashtbl.find_opt redis.metadata name
 
 module Handlers = struct
   let ping = Resp.RString "PONG"
@@ -120,7 +103,9 @@ module Handlers = struct
     Resp.RBulkString response_with_header
 end
 
-let handle_command redis = function
+exception UnparsedRDB
+
+let process_command redis = function
   | Command.Ping -> Handlers.ping
   | Command.Echo something -> Handlers.echo something
   | Command.Get { index; key; now } -> Handlers.get redis index key ~now
@@ -134,10 +119,53 @@ let handle_command redis = function
   | Command.Config_get_dbfilename ->
       RArray [ RBulkString "dbfilename"; RBulkString redis.config.dbfilename ]
   | Command.Psync -> (
-      match get_replication_role redis with
+      match redis.config.replication_role with
       | Master { replid; repl_offset } ->
           RString (Printf.sprintf "FULLRESYNC %s %d" replid repl_offset)
       | Slave _ -> RError "Can't be handled by a slave")
   | Command.Select i ->
       let _ = Handlers.get_database redis i in
       RString "OK"
+
+let start redis =
+  let open Event in
+  let open Domainslib in
+  let pool = Domainslib.Task.setup_pool ~num_domains:1 () in
+  let rec work () =
+    try
+      let command, response_channel = Event.receive redis.in_chan |> sync in
+      let response = process_command redis command in
+      Event.send response_channel response |> sync;
+      work ()
+    with _ -> work ()
+  in
+  let _ = Task.async pool work in
+  ()
+
+let init ~replication_role ~dbfilename ~dir () =
+  let file_path = Filename.concat dir dbfilename in
+  let config = { dir; dbfilename; replication_role } in
+  let in_chan = Event.new_channel () in
+  let redis =
+    try
+      let ic = open_in file_path in
+      let buf = Bytes.create 2048 in
+      let nb_read = input ic buf 0 2048 in
+      let content = Bytes.sub_string buf 0 nb_read in
+      match Rdb.of_string content with
+      | Ok (metadata, databases) -> { metadata; databases; config; in_chan }
+      | Error _err -> raise UnparsedRDB
+    with Sys_error _ | UnparsedRDB ->
+      let database = Hashtbl.create 256 in
+      let databases = Hashtbl.create 16 in
+      Hashtbl.add databases 0 database;
+      let metadata = Hashtbl.create 32 in
+      { metadata; databases; config; in_chan }
+  in
+  start redis;
+  redis
+
+let handle_command redis command =
+  let out_chan = Event.new_channel () in
+  Event.send redis.in_chan (command, out_chan) |> Event.sync;
+  Event.receive out_chan |> Event.sync

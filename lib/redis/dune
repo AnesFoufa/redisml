@@ -1,6 +1,6 @@
 (library
  (name redis)
- (libraries resp angstrom)
+ (libraries resp angstrom domainslib)
  (modules redis rdb database )
  (private_modules rdb)
  )

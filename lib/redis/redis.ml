@@ -33,7 +33,7 @@ type t = {
   metadata : Rdb.metadata;
   databases : Rdb.databases;
   config : config;
-  in_chan : (Command.t * Resp.t Event.channel) Event.channel;
+  in_chan : (Command.t * (Resp.t * string option) Event.channel) Event.channel;
 }
 
 module Database = Database
@@ -105,27 +105,35 @@ end
 
 exception UnparsedRDB
 
+let get_rdb redis = Rdb.to_string redis.metadata redis.databases (* hello *)
+
+let format_rdb rdb_string =
+  let length = String.length rdb_string in
+  Printf.sprintf "$%d\r\n%s" length rdb_string
+
 let process_command redis = function
-  | Command.Ping -> Handlers.ping
-  | Command.Echo something -> Handlers.echo something
-  | Command.Get { index; key; now } -> Handlers.get redis index key ~now
+  | Command.Ping -> (Handlers.ping, None)
+  | Command.Echo something -> (Handlers.echo something, None)
+  | Command.Get { index; key; now } -> (Handlers.get redis index key ~now, None)
   | Command.Set { index; key; value; duration; now } ->
-      Handlers.set ?duration redis index key value ~now
-  | Keys { index; now } -> Handlers.keys redis index now
-  | Command.Info_replication -> Handlers.info_replication redis.config
-  | Command.Repl_conf -> Resp.RString "OK"
+      (Handlers.set ?duration redis index key value ~now, None)
+  | Keys { index; now } -> (Handlers.keys redis index now, None)
+  | Command.Info_replication -> (Handlers.info_replication redis.config, None)
+  | Command.Repl_conf -> (Resp.RString "OK", None)
   | Command.Config_get_dir ->
-      RArray [ RBulkString "dir"; RBulkString redis.config.dir ]
+      (RArray [ RBulkString "dir"; RBulkString redis.config.dir ], None)
   | Command.Config_get_dbfilename ->
-      RArray [ RBulkString "dbfilename"; RBulkString redis.config.dbfilename ]
+      ( RArray [ RBulkString "dbfilename"; RBulkString redis.config.dbfilename ],
+        None )
   | Command.Psync -> (
       match redis.config.replication_role with
       | Master { replid; repl_offset } ->
-          RString (Printf.sprintf "FULLRESYNC %s %d" replid repl_offset)
-      | Slave _ -> RError "Can't be handled by a slave")
+          ( RString (Printf.sprintf "FULLRESYNC %s %d" replid repl_offset),
+            Some (get_rdb redis |> format_rdb) )
+      | Slave _ -> (RError "Can't be handled by a slave", None))
   | Command.Select i ->
       let _ = Handlers.get_database redis i in
-      RString "OK"
+      (RString "OK", None)
 
 let start redis =
   let open Event in
@@ -135,12 +143,23 @@ let start redis =
     try
       let command, response_channel = Event.receive redis.in_chan |> sync in
       let response = process_command redis command in
-      Event.send response_channel response |> sync;
+      let e = Event.send response_channel response in
+      sync e;
       work ()
     with _ -> work ()
   in
   let _ = Task.async pool work in
   ()
+
+let init_metadata =
+  [
+    ("used-mem", "1098928");
+    ("redis-bits", "64");
+    ("aof-base", "0");
+    ("ctime", "1706821741");
+    ("redis-ver", "7.2.0");
+  ]
+  |> List.to_seq |> Hashtbl.of_seq
 
 let init ~replication_role ~dbfilename ~dir () =
   let file_path = Filename.concat dir dbfilename in
@@ -156,10 +175,8 @@ let init ~replication_role ~dbfilename ~dir () =
       | Ok (metadata, databases) -> { metadata; databases; config; in_chan }
       | Error _err -> raise UnparsedRDB
     with Sys_error _ | UnparsedRDB ->
-      let database = Hashtbl.create 256 in
       let databases = Hashtbl.create 16 in
-      Hashtbl.add databases 0 database;
-      let metadata = Hashtbl.create 32 in
+      let metadata = init_metadata in
       { metadata; databases; config; in_chan }
   in
   start redis;
@@ -169,3 +186,7 @@ let handle_command redis command =
   let out_chan = Event.new_channel () in
   Event.send redis.in_chan (command, out_chan) |> Event.sync;
   Event.receive out_chan |> Event.sync
+
+let to_string redis = Rdb.to_string redis.metadata redis.databases
+
+module Rdb = Rdb

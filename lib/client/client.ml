@@ -32,5 +32,5 @@ let evaluate client ~now input =
     Result.Ok response
   in
   match response_res with
-  | Result.Ok response -> response
-  | Result.Error m -> Resp.RError m
+  | Result.Ok (response, stream) -> (response, stream)
+  | Result.Error m -> (Resp.RError m, None)

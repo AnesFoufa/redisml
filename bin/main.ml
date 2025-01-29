@@ -1,15 +1,17 @@
 open Unix
 
-let evaluate line evaluator ~now =
+let evaluate line client ~now =
   let response_res =
     let ( let* ) = Result.bind in
     let* rvalue = Resp.of_string line in
-    Ok (Client.evaluate evaluator ~now rvalue)
+    Ok (Client.evaluate client ~now rvalue)
   in
-  let response_resp =
-    match response_res with Ok response -> response | Error m -> Resp.RError m
+  let response_resp, stream =
+    match response_res with
+    | Ok (response, stream) -> (response, stream)
+    | Error m -> (Resp.RError m, None)
   in
-  Resp.to_string response_resp
+  (Resp.to_string response_resp, stream)
 
 let now () = Unix.gettimeofday () *. 1000. |> Int64.of_float
 
@@ -19,30 +21,29 @@ let read client_fd =
   let nb_read = input in_chan buf 0 100 in
   if nb_read == 0 then raise End_of_file else ();
   let line = Bytes.sub_string buf 0 nb_read in
-  print_endline (String.escaped line);
   line
 
 let print client_fd response_line =
   let out_chan = out_channel_of_descr client_fd in
-  print_endline response_line;
   Printf.fprintf out_chan "%s" response_line;
   flush out_chan
 
-let rec repl client_fd redis evaluator =
+let rec repl client_fd redis client =
   try
     let line = read client_fd in
     let now = now () in
-    let response = evaluate line evaluator ~now in
+    let response, stream = evaluate line client ~now in
     print client_fd response;
-    repl client_fd redis evaluator
+    (match stream with Some s -> print client_fd s | None -> ());
+    repl client_fd redis client
   with End_of_file -> ()
 
 let rec accept_socket_and_repl pool server_socket redis =
   let client_socket, _ = accept server_socket in
   let work () =
-    let evaluator = Client.init redis in
+    let client = Client.init redis in
     print_endline "New client";
-    repl client_socket redis evaluator;
+    repl client_socket redis client;
     close client_socket;
     print_endline "Client left"
   in

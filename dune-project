@@ -19,4 +19,5 @@
     (async_unix (>= v0.17.0)) 
     angstrom
     ppx_deriving
-    domainslib))
+    domainslib
+    ))

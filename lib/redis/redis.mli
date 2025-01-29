@@ -36,4 +36,5 @@ module Command : sig
     | Select of int
 end
 
-val handle_command : t -> Command.t -> Resp.t
+val handle_command : t -> Command.t -> Resp.t * string option
+val to_string : t -> string

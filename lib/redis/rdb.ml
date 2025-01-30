@@ -140,33 +140,36 @@ let size_encode n =
 
 (* Encode an integer in Redis RDB integer format *)
 let encode_redis_integer value =
-  if value >= -128 && value <= 127 then
-    (* 8-bit integer encoding (prefix 0xC0) *)
-    Bytes.cat
-      (Bytes.make 1 (Char.chr (0xC0 lor 0)))
-      (Bytes.make 1 (Char.chr (value land 0xFF)))
-  else if value >= -32768 && value <= 32767 then
-    (* 16-bit integer encoding (prefix 0xC1) *)
-    Bytes.concat Bytes.empty
-      [
-        Bytes.make 1 (Char.chr (0xC0 lor 1));
-        Bytes.make 1 (Char.chr (value land 0xFF));
-        Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
-      ]
-  else
-    (* 32-bit integer encoding (prefix 0xC2) *)
-    Bytes.concat Bytes.empty
-      [
-        Bytes.make 1 (Char.chr (0xC0 lor 2));
-        Bytes.make 1 (Char.chr (value land 0xFF));
-        Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
-        Bytes.make 1 (Char.chr ((value lsr 16) land 0xFF));
-        Bytes.make 1 (Char.chr ((value lsr 24) land 0xFF));
-      ]
+  let bytes =
+    if value >= -128 && value <= 127 then
+      (* 8-bit integer encoding (prefix 0xC0) *)
+      Bytes.cat
+        (Bytes.make 1 (Char.chr (0xC0 lor 0)))
+        (Bytes.make 1 (Char.chr (value land 0xFF)))
+    else if value >= -32768 && value <= 32767 then
+      (* 16-bit integer encoding (prefix 0xC1) *)
+      Bytes.concat Bytes.empty
+        [
+          Bytes.make 1 (Char.chr (0xC0 lor 1));
+          Bytes.make 1 (Char.chr (value land 0xFF));
+          Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
+        ]
+    else
+      (* 32-bit integer encoding (prefix 0xC2) *)
+      Bytes.concat Bytes.empty
+        [
+          Bytes.make 1 (Char.chr (0xC0 lor 2));
+          Bytes.make 1 (Char.chr (value land 0xFF));
+          Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
+          Bytes.make 1 (Char.chr ((value lsr 16) land 0xFF));
+          Bytes.make 1 (Char.chr ((value lsr 24) land 0xFF));
+        ]
+  in
+  Bytes.to_string bytes
 
 let string_encode str =
   match int_of_string_opt str with
-  | Some i -> encode_redis_integer i |> Bytes.to_string
+  | Some i -> encode_redis_integer i
   | None ->
       let length = String.length str |> size_encode in
       length ^ str

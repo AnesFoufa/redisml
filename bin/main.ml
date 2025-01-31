@@ -47,7 +47,7 @@ let rec accept_socket_and_repl pool server_socket redis =
     close client_socket;
     print_endline "Client left"
   in
-  let _ = Thread_pool.add_work pool work in
+  let _ = Domainslib.Task.async pool work in
   accept_socket_and_repl pool server_socket redis
 
 let usage_message =
@@ -115,5 +115,5 @@ let () =
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", !port));
   listen server_socket 1;
   let redis = init ~replication_role ~dbfilename:!dbfilename ~dir:!dir () in
-  let pool = Thread_pool.create ~max_num_threads:4 () |> Core.ok_exn in
+  let pool = Domainslib.Task.setup_pool ~num_domains:4 () in
   accept_socket_and_repl pool server_socket redis

@@ -16,7 +16,6 @@
  (allow_empty true)
  (version 0.1)
  (depends
-    (async_unix (>= v0.17.0)) 
     angstrom
     ppx_deriving
     domainslib

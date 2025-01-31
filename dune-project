@@ -20,4 +20,5 @@
     angstrom
     ppx_deriving
     domainslib
+    alcotest
     ))

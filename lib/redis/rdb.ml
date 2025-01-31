@@ -88,11 +88,11 @@ let key_and_record =
   return (key, { value = Resp.RBulkString value; expire = expire_option })
 
 let database_subsction =
-  let* _start_indicator = char '\254' in
+  let* _start_indicator = char '\xFE' in
   let* index = rdb_size in
   match index with
   | Size i ->
-      let* _table_size_indicator = char '\251' in
+      let* _table_size_indicator = char '\xFB' in
       let* _database_size = rdb_size in
       let* _nb_expiring_keys = rdb_size in
       let* keys_and_records = many key_and_record in
@@ -122,48 +122,34 @@ let size_encode n =
     let b2 = n land 0xFF in
     String.init 2 (fun i -> Char.chr (if i = 0 then b1 else b2))
   else if n < 1 lsl 32 then (
-    let b1 = 0b11111110 in
     let bytes = Bytes.create 5 in
-    Bytes.set bytes 0 (Char.chr b1);
-    for i = 0 to 3 do
-      Bytes.set bytes (4 - i) (Char.chr ((n lsr (8 * i)) land 0xFF))
-    done;
+    Bytes.set bytes 0 (Char.chr 0b11111110);
+    Bytes.set_int32_be bytes 1 (Int32.of_int n);
     Bytes.to_string bytes)
   else
-    let b1 = 0b11111111 in
     let bytes = Bytes.create 9 in
-    Bytes.set bytes 0 (Char.chr b1);
-    for i = 0 to 7 do
-      Bytes.set bytes (8 - i) (Char.chr ((n lsr (8 * i)) land 0xFF))
-    done;
+    Bytes.set bytes 0 (Char.chr 0b11111111);
+    Bytes.set_int64_be bytes 1 (Int64.of_int n);
     Bytes.to_string bytes
 
 (* Encode an integer in Redis RDB integer format *)
 let encode_redis_integer value =
   let bytes =
-    if value >= -128 && value <= 127 then
-      (* 8-bit integer encoding (prefix 0xC0) *)
-      Bytes.cat
-        (Bytes.make 1 (Char.chr (0xC0 lor 0)))
-        (Bytes.make 1 (Char.chr (value land 0xFF)))
-    else if value >= -32768 && value <= 32767 then
-      (* 16-bit integer encoding (prefix 0xC1) *)
-      Bytes.concat Bytes.empty
-        [
-          Bytes.make 1 (Char.chr (0xC0 lor 1));
-          Bytes.make 1 (Char.chr (value land 0xFF));
-          Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
-        ]
+    if value >= -128 && value <= 127 then (
+      let buf = Bytes.create 2 in
+      Bytes.set buf 0 (Char.chr (0xC0 lor 0));
+      Bytes.set buf 1 (Char.chr (value land 0xFF));
+      buf)
+    else if value >= -32768 && value <= 32767 then (
+      let buf = Bytes.create 3 in
+      Bytes.set buf 0 (Char.chr (0xC0 lor 1));
+      Bytes.set_int16_le buf 1 value;
+      buf)
     else
-      (* 32-bit integer encoding (prefix 0xC2) *)
-      Bytes.concat Bytes.empty
-        [
-          Bytes.make 1 (Char.chr (0xC0 lor 2));
-          Bytes.make 1 (Char.chr (value land 0xFF));
-          Bytes.make 1 (Char.chr ((value lsr 8) land 0xFF));
-          Bytes.make 1 (Char.chr ((value lsr 16) land 0xFF));
-          Bytes.make 1 (Char.chr ((value lsr 24) land 0xFF));
-        ]
+      let buf = Bytes.create 5 in
+      Bytes.set buf 0 (Char.chr (0xC0 lor 2));
+      Bytes.set_int32_le buf 1 (Int32.of_int value);
+      buf
   in
   Bytes.to_string bytes
 
@@ -189,7 +175,7 @@ let key_value_to_string =
   let open Database in
   function
   | key, { value; expire = None } ->
-      String.cat (string_encode key) (encode_value value)
+      Printf.sprintf "\000%s%s" (string_encode key) (encode_value value)
   | key, { value; expire = Some duration }
     when Int64.rem duration (Int64.of_int 1000) |> Int64.equal (Int64.of_int 0)
     ->
@@ -215,7 +201,7 @@ let database_subsection_to_string db =
     |> Seq.length
   in
   let resizdb_field =
-    Printf.sprintf "0xFB%s%s"
+    Printf.sprintf "\xFB%s%s"
       (size_encode hashtable_size)
       (size_encode expiry_hashtable_size)
   in

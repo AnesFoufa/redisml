@@ -13,6 +13,7 @@ depends: [
   "angstrom"
   "ppx_deriving"
   "domainslib"
+  "alcotest"
   "odoc" {with-doc}
 ]
 build: [

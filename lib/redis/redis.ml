@@ -189,4 +189,13 @@ let handle_command redis command =
 
 let to_string redis = Rdb.to_string redis.metadata redis.databases
 
-module Rdb = Rdb
+let of_string str ~replication_role ~dbfilename ~dir =
+  let config = { dir; dbfilename; replication_role } in
+  let in_chan = Event.new_channel () in
+  let ( let* ) = Result.bind in
+  let* metadata, databases = Rdb.of_string str in
+  let redis = { metadata; databases; config; in_chan } in
+  start redis;
+  Ok redis
+
+let get_all_metadata redis = redis.metadata |> Hashtbl.to_seq

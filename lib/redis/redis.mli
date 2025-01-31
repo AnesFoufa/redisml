@@ -14,6 +14,7 @@ val init :
   t
 
 val get_metadata : t -> string -> string option
+val get_all_metadata : t -> (string * string) Seq.t
 
 module Command : sig
   type t =
@@ -38,3 +39,10 @@ end
 
 val handle_command : t -> Command.t -> Resp.t * string option
 val to_string : t -> string
+
+val of_string :
+  string ->
+  replication_role:replication_role ->
+  dbfilename:string ->
+  dir:string ->
+  (t, string) result

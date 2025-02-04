@@ -30,8 +30,8 @@ let rdb_sync =
   take nb_chars
 
 let read_metadata_and_databases socket =
-  let buffer = Bytes.create 1024 in
-  let bytes_read = Unix.read socket buffer 0 1024 in
+  let buffer = Bytes.create 2056 in
+  let bytes_read = Unix.read socket buffer 0 2056 in
   let response = Bytes.sub_string buffer 0 bytes_read in
   let ( let* ) = Result.bind in
   let* rdb =

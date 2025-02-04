@@ -16,6 +16,8 @@ val init :
 val get_metadata : t -> string -> string option
 val get_all_metadata : t -> (string * string) Seq.t
 
+type client_id
+
 module Command : sig
   type t =
     | Ping
@@ -35,9 +37,15 @@ module Command : sig
     | Repl_conf
     | Psync
     | Select of int
+
+  type command_error = NotConnected | NotHandeledBySlave
 end
 
-val handle_command : t -> Command.t -> Resp.t * string option
+val handle_command :
+  client_id -> t -> Command.t -> (Resp.t, Command.command_error) Result.t
+
+val connect : t -> client_id * string Event.channel
+val disconnect : client_id -> t -> unit
 val to_string : t -> string
 
 val of_string :

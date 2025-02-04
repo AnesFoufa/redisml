@@ -38,7 +38,8 @@ let test_encode_and_decode_database_with_string () =
         duration = None;
       }
   in
-  let _ = handle_command redis set_command in
+  let client_id, _ = connect redis in
+  let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
   let maybe_other_redis =
     of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""
@@ -60,7 +61,8 @@ let test_encode_and_decode_database_with_string_with_miliseconds_duration () =
         duration = Some (Int64.of_int 123);
       }
   in
-  let _ = handle_command redis set_command in
+  let client_id, _ = connect redis in
+  let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
   let maybe_other_redis =
     of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""
@@ -82,7 +84,8 @@ let test_encode_and_decode_database_with_string_with_seconds_duration () =
         duration = Some (Int64.of_int 123000);
       }
   in
-  let _ = handle_command redis set_command in
+  let client_id, _ = connect redis in
+  let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
   let maybe_other_redis =
     of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""

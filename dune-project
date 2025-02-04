@@ -20,4 +20,5 @@
     ppx_deriving
     domainslib
     alcotest
+    uuidm
     ))

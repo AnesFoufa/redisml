@@ -1,6 +1,8 @@
-type t = { mutable current_index : int; redis : Redis.t }
+type t = { mutable current_index : int; redis : Redis.t; id : Redis.client_id }
 
-let init redis = { current_index = 0; redis }
+let init redis =
+  let id, stream_chanel = Redis.connect redis in
+  ({ current_index = 0; redis; id }, stream_chanel)
 
 let evaluate_command client ~now command redis =
   let index = client.current_index in
@@ -22,15 +24,21 @@ let evaluate_command client ~now command redis =
     | Repl_conf -> Redis.Command.Repl_conf
     | Psync -> Redis.Command.Psync
   in
-  Redis.handle_command redis redis_command
+  Redis.handle_command client.id redis redis_command
 
 let evaluate client ~now input =
   let response_res =
     let ( let* ) = Result.bind in
     let* command = Command.of_resp input in
     let response = evaluate_command client ~now command client.redis in
-    Result.Ok response
+    let resp_response =
+      Result.fold
+        ~ok:(fun x -> x)
+        ~error:(fun _ -> Resp.RError "Unhandled command")
+        response
+    in
+    Result.Ok resp_response
   in
   match response_res with
-  | Result.Ok (response, stream) -> (response, stream)
-  | Result.Error m -> (Resp.RError m, None)
+  | Result.Ok response_res -> response_res
+  | Result.Error m -> Resp.RError m

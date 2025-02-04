@@ -5,10 +5,8 @@ let test_encode_and_decode_empty_database () =
     Redis.init ~replication_role:Redis.master ~dbfilename:"" ~dir:"" ()
   in
   let redis_str = Redis.to_string redis in
-  let maybe_other_redis =
-    Redis.of_string redis_str ~dbfilename:"" ~dir:""
-      ~replication_role:Redis.master
-  in
+  let maybe_other_redis = Redis.of_string redis_str ~dbfilename:"" ~dir:"" in
+
   check bool "successful deserialization" (Result.is_ok maybe_other_redis) true;
   let module OrderedStringDouble = struct
     type t = string * string
@@ -41,9 +39,7 @@ let test_encode_and_decode_database_with_string () =
   let client_id, _ = connect redis in
   let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
-  let maybe_other_redis =
-    of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""
-  in
+  let maybe_other_redis = of_string redis_str ~dir:"" ~dbfilename:"" in
   print_endline (String.escaped redis_str);
   let _ = Result.map_error print_endline maybe_other_redis in
   check bool "successfully decoded" (Result.is_ok maybe_other_redis) true
@@ -64,9 +60,7 @@ let test_encode_and_decode_database_with_string_with_miliseconds_duration () =
   let client_id, _ = connect redis in
   let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
-  let maybe_other_redis =
-    of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""
-  in
+  let maybe_other_redis = of_string redis_str ~dir:"" ~dbfilename:"" in
   print_endline (String.escaped redis_str);
   let _ = Result.map_error print_endline maybe_other_redis in
   check bool "successfully decoded" (Result.is_ok maybe_other_redis) true
@@ -87,9 +81,7 @@ let test_encode_and_decode_database_with_string_with_seconds_duration () =
   let client_id, _ = connect redis in
   let _ = handle_command client_id redis set_command in
   let redis_str = to_string redis in
-  let maybe_other_redis =
-    of_string redis_str ~replication_role:master ~dir:"" ~dbfilename:""
-  in
+  let maybe_other_redis = of_string redis_str ~dir:"" ~dbfilename:"" in
   print_endline (String.escaped redis_str);
   let _ = Result.map_error print_endline maybe_other_redis in
   check bool "successfully decoded" (Result.is_ok maybe_other_redis) true

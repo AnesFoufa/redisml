@@ -1,6 +1,10 @@
 type replication_role =
   | Master of { replid : string; repl_offset : int }
-  | Slave of { master_host : string; master_port : int }
+  | Slave of { port : int; master_host : string; master_port : int }
+
+let master_replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+let master_offset = 0
+let master = Master { replid = master_replid; repl_offset = master_offset }
 
 type client_id = Uuidm.t
 
@@ -27,17 +31,35 @@ module Command = struct
   type command_error = NotConnected | NotHandeledBySlave
 end
 
-type config = {
-  dir : string;
-  dbfilename : string;
-  replication_role : replication_role;
-}
-
 module Uuidm = struct
   include Uuidm
 
   let hash u = Uuidm.to_string u |> String.hash
 end
+
+module SlavesSet = Set.Make (Uuidm)
+
+type replication =
+  | MasterState of {
+      replid : string;
+      repl_offset : int;
+      slaves : SlavesSet.t ref;
+    }
+  | SlaveState of {
+      master_host : string;
+      master_port : int;
+      slave_client : Slave_client.t;
+    }
+
+let master_state () =
+  MasterState
+    {
+      replid = master_replid;
+      repl_offset = master_offset;
+      slaves = ref SlavesSet.empty;
+    }
+
+type config = { dir : string; dbfilename : string; replication : replication }
 
 module ClientTable = Hashtbl.Make (Uuidm)
 
@@ -63,10 +85,6 @@ type t = {
 }
 
 module Database = Database
-
-let master =
-  Master
-    { replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"; repl_offset = 0 }
 
 let get_metadata redis name = Hashtbl.find_opt redis.metadata name
 
@@ -116,14 +134,14 @@ module Handlers = struct
     |> List.of_seq
     |> fun x -> Resp.RArray x
 
-  let info_replication redis =
+  let info_replication config =
     let response =
-      match redis.replication_role with
-      | Master { replid; repl_offset } ->
+      match config.replication with
+      | MasterState { replid; repl_offset; _ } ->
           Printf.sprintf
             "role:master\n\rmaster_replid:%s\n\rmaster_repl_offset:%d" replid
             repl_offset
-      | Slave _ -> "role:slave"
+      | SlaveState _ -> "role:slave"
     in
     let response_with_header = Printf.sprintf "#Replication\n\r%s" response in
     Resp.RBulkString response_with_header
@@ -135,12 +153,24 @@ let format_rdb rdb_string =
   let length = String.length rdb_string in
   Printf.sprintf "$%d\r\n%s" length rdb_string
 
-let process_command client_channel redis = function
+let process_command client_channel redis client_id = function
   | Command.Ping -> Handlers.ping
   | Command.Echo something -> Handlers.echo something
   | Command.Get { index; key; now } -> Handlers.get redis index key ~now
   | Command.Set { index; key; value; duration; now } ->
-      Handlers.set ?duration redis index key value ~now
+      let res = Handlers.set ?duration redis index key value ~now in
+      (match redis.config.replication with
+      | MasterState { slaves; _ } ->
+          let message =
+            Resp.RArray [ Resp.RBulkString "SET"; Resp.RBulkString key; value ]
+          in
+          !slaves
+          |> SlavesSet.iter (fun client_id ->
+                 let out_chan = ClientTable.find redis.client_table client_id in
+                 redis.stream_buffer
+                 |> Queue.push (Resp.to_string message, out_chan))
+      | SlaveState _ -> ());
+      res
   | Keys { index; now } -> Handlers.keys redis index now
   | Command.Info_replication -> Handlers.info_replication redis.config
   | Command.Repl_conf -> Resp.RString "OK"
@@ -149,14 +179,15 @@ let process_command client_channel redis = function
   | Command.Config_get_dbfilename ->
       RArray [ RBulkString "dbfilename"; RBulkString redis.config.dbfilename ]
   | Command.Psync -> (
-      match redis.config.replication_role with
-      | Master { replid; repl_offset } ->
+      match redis.config.replication with
+      | MasterState { replid; repl_offset; slaves } ->
           let rdb_string =
             Rdb.to_string redis.metadata redis.databases |> format_rdb
           in
+          slaves := SlavesSet.add client_id !slaves;
           Queue.push (rdb_string, client_channel) redis.stream_buffer;
           RString (Printf.sprintf "FULLRESYNC %s %d" replid repl_offset)
-      | Slave _ -> RError "Can't be handled by a slave")
+      | SlaveState _ -> RError "Can't be handled by a slave")
   | Command.Select i ->
       let _ = Handlers.get_database redis i in
       RString "OK"
@@ -164,7 +195,7 @@ let process_command client_channel redis = function
 let handle_database_command redis client_id command response_channel =
   match ClientTable.find_opt redis.client_table client_id with
   | Some client_channel ->
-      let response = process_command client_channel redis command in
+      let response = process_command client_channel redis client_id command in
       let e = Event.send response_channel (Ok response) in
       Event.sync e
   | None ->
@@ -188,6 +219,9 @@ let handle_message redis = function
   | DatabaseCommand { client_id; out_chan; command } ->
       handle_database_command redis client_id command out_chan
 
+let handle_stream _queue message channel =
+  Event.send channel message |> Event.sync
+
 let start redis =
   let open Domainslib in
   let pool = Domainslib.Task.setup_pool ~num_domains:1 () in
@@ -198,7 +232,7 @@ let start redis =
       | None -> ());
       (match Queue.take redis.stream_buffer with
       | exception Queue.Empty -> ()
-      | message, channel -> Event.send channel message |> Event.sync);
+      | message, channel -> handle_stream redis.stream_buffer message channel);
       work ()
     with _ -> work ()
   in
@@ -215,26 +249,48 @@ let init_metadata =
   ]
   |> List.to_seq |> Hashtbl.of_seq
 
+let init_master replid repl_offset dir dbfilename in_chan client_table
+    stream_buffer =
+  let replication =
+    MasterState { replid; repl_offset; slaves = ref SlavesSet.empty }
+  in
+  let config = { dir; dbfilename; replication } in
+  try
+    let file_path = Filename.concat dir dbfilename in
+    let ic = open_in file_path in
+    let buf = Bytes.create 2048 in
+    let nb_read = input ic buf 0 2048 in
+    let content = Bytes.sub_string buf 0 nb_read in
+    match Rdb.of_string content with
+    | Ok (metadata, databases) ->
+        { metadata; databases; config; in_chan; client_table; stream_buffer }
+    | Error _err -> raise UnparsedRDB
+  with Sys_error _ | UnparsedRDB ->
+    let databases = Hashtbl.create 16 in
+    let metadata = init_metadata in
+    { metadata; databases; config; in_chan; client_table; stream_buffer }
+
+let init_slave master_host master_port port dir dbfilename in_chan client_table
+    stream_buffer =
+  let slave_client, metadata, databases =
+    Slave_client.init ~port ~master_host ~master_port
+  in
+  let replication = SlaveState { master_host; master_port; slave_client } in
+  let config = { dir; dbfilename; replication } in
+  { metadata; databases; config; in_chan; client_table; stream_buffer }
+
 let init ~replication_role ~dbfilename ~dir () =
-  let file_path = Filename.concat dir dbfilename in
-  let config = { dir; dbfilename; replication_role } in
   let in_chan = Event.new_channel () in
   let client_table = ClientTable.create 256 in
   let stream_buffer = Queue.create () in
   let redis =
-    try
-      let ic = open_in file_path in
-      let buf = Bytes.create 2048 in
-      let nb_read = input ic buf 0 2048 in
-      let content = Bytes.sub_string buf 0 nb_read in
-      match Rdb.of_string content with
-      | Ok (metadata, databases) ->
-          { metadata; databases; config; in_chan; client_table; stream_buffer }
-      | Error _err -> raise UnparsedRDB
-    with Sys_error _ | UnparsedRDB ->
-      let databases = Hashtbl.create 16 in
-      let metadata = init_metadata in
-      { metadata; databases; config; in_chan; client_table; stream_buffer }
+    match replication_role with
+    | Master { replid; repl_offset } ->
+        init_master replid repl_offset dir dbfilename in_chan client_table
+          stream_buffer
+    | Slave { master_host; master_port; port } ->
+        init_slave master_host master_port port dir dbfilename in_chan
+          client_table stream_buffer
   in
   start redis;
   redis
@@ -247,9 +303,9 @@ let handle_command client_id redis command =
 
 let to_string redis = Rdb.to_string redis.metadata redis.databases
 
-let of_string str ~replication_role ~dbfilename ~dir =
+let of_string str ~dbfilename ~dir =
   let client_table = ClientTable.create 256 in
-  let config = { dir; dbfilename; replication_role } in
+  let config = { dir; dbfilename; replication = master_state () } in
   let in_chan = Event.new_channel () in
   let stream_buffer = Queue.create () in
   let ( let* ) = Result.bind in

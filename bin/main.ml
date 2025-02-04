@@ -98,20 +98,11 @@ let () =
     if !replicaof |> String.equal "" then master
     else
       match parse_host_and_port !replicaof with
-      | Ok (host, port) ->
-          Redis.Slave { master_host = host; master_port = port }
+      | Ok (host, master_port) ->
+          Redis.Slave { master_host = host; master_port; port = !port }
       | Error err ->
           Printf.sprintf "%s %s" "Incorrect replicaof parameter:" err
           |> failwith
-  in
-  let () =
-    match replication_role with
-    | Slave { master_host; master_port } ->
-        let slave_client =
-          Slave_client.init ~master_host ~master_port ~port:!port
-        in
-        Slave_client.handshake slave_client
-    | Master _ -> ()
   in
   let server_socket = socket PF_INET SOCK_STREAM 0 in
   setsockopt server_socket SO_REUSEADDR true;

@@ -1,6 +1,0 @@
-(library
- (name slave_client)
- (libraries resp unix)
- (modules slave_client)
- )
-

@@ -2,7 +2,7 @@ type t
 
 type replication_role =
   | Master of { replid : string; repl_offset : int }
-  | Slave of { master_host : string; master_port : int }
+  | Slave of { port : int; master_host : string; master_port : int }
 
 val master : replication_role
 
@@ -47,10 +47,4 @@ val handle_command :
 val connect : t -> client_id * string Event.channel
 val disconnect : client_id -> t -> unit
 val to_string : t -> string
-
-val of_string :
-  string ->
-  replication_role:replication_role ->
-  dbfilename:string ->
-  dir:string ->
-  (t, string) result
+val of_string : string -> dbfilename:string -> dir:string -> (t, string) result

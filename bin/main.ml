@@ -36,8 +36,12 @@ let rec repl client_fd stream_channel redis client =
       print client_fd response
     else ();
     (match Event.receive stream_channel |> Event.poll with
-    | Some message -> print client_fd message
-    | None -> ());
+    | Some message ->
+        Printf.printf "streaming message %s" message;
+        print client_fd message
+    | None ->
+        print_endline "no message";
+        ());
     repl client_fd stream_channel redis client
   with End_of_file -> ()
 

@@ -56,3 +56,4 @@ let rec to_string = function
   | NullBulk -> Printf.sprintf "$-1\r\n"
 
 let of_string = parse_string ~consume:Consume.All resp
+let many_of_string = parse_string ~consume:Consume.All (many resp)

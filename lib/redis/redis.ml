@@ -76,8 +76,8 @@ type incoming_message =
   | ConnectionCommand of connection_message
 
 type t = {
-  metadata : Rdb.metadata;
-  databases : Rdb.databases;
+  mutable metadata : Rdb.metadata;
+  mutable databases : Rdb.databases;
   config : config;
   in_chan : incoming_message Event.channel;
   client_table : string Event.channel ClientTable.t;
@@ -222,23 +222,6 @@ let handle_message redis = function
 let handle_stream _queue message channel =
   Event.send channel message |> Event.sync
 
-let start redis =
-  let open Domainslib in
-  let pool = Domainslib.Task.setup_pool ~num_domains:1 () in
-  let rec work () =
-    try
-      (match Event.receive redis.in_chan |> Event.poll with
-      | Some incoming_message -> handle_message redis incoming_message
-      | None -> ());
-      (match Queue.take redis.stream_buffer with
-      | exception Queue.Empty -> ()
-      | message, channel -> handle_stream redis.stream_buffer message channel);
-      work ()
-    with _ -> work ()
-  in
-  let _ = Task.async pool work in
-  ()
-
 let init_metadata =
   [
     ("used-mem", "1098928");
@@ -272,12 +255,68 @@ let init_master replid repl_offset dir dbfilename in_chan client_table
 
 let init_slave master_host master_port port dir dbfilename in_chan client_table
     stream_buffer =
-  let slave_client, metadata, databases =
-    Slave_client.init ~port ~master_host ~master_port
-  in
+  let slave_client = Slave_client.init ~port ~master_host ~master_port in
   let replication = SlaveState { master_host; master_port; slave_client } in
   let config = { dir; dbfilename; replication } in
-  { metadata; databases; config; in_chan; client_table; stream_buffer }
+  {
+    metadata = Hashtbl.create 256;
+    databases = Hashtbl.create 1024;
+    config;
+    in_chan;
+    client_table;
+    stream_buffer;
+  }
+
+let handle_command client_id redis command =
+  let out_chan = Event.new_channel () in
+  Event.send redis.in_chan (DatabaseCommand { client_id; command; out_chan })
+  |> Event.sync;
+  Event.receive out_chan |> Event.sync
+
+let to_string redis = Rdb.to_string redis.metadata redis.databases
+let get_all_metadata redis = redis.metadata |> Hashtbl.to_seq
+
+let connect redis =
+  let chan = Event.new_channel () in
+  Event.send redis.in_chan (ConnectionCommand (Connect chan)) |> Event.sync;
+  Event.receive chan |> Event.sync
+
+let disconnect client_id redis =
+  let chan = Event.new_channel () in
+  Event.send redis.in_chan (ConnectionCommand (Disconnect (client_id, chan)))
+  |> Event.sync;
+  Event.receive chan |> Event.sync
+
+let start redis =
+  let open Domainslib in
+  let pool = Domainslib.Task.setup_pool ~num_domains:1 () in
+  let rec work () =
+    try
+      (match Event.receive redis.in_chan |> Event.poll with
+      | Some incoming_message -> handle_message redis incoming_message
+      | None -> ());
+      (match Queue.take redis.stream_buffer with
+      | exception Queue.Empty -> ()
+      | message, channel -> handle_stream redis.stream_buffer message channel);
+      (match redis.config.replication with
+      | MasterState _ -> ()
+      | SlaveState { slave_client; _ } -> (
+          let open Slave_client in
+          match Slave_client.poll slave_client with
+          | No_op -> ()
+          | Updates updates ->
+              updates
+              |> List.iter (fun { key; value; duration; now } ->
+                     let _ = Handlers.set ?duration redis 0 key value ~now in
+                     ())
+          | Full_sync (metadata, databases) ->
+              redis.metadata <- metadata;
+              redis.databases <- databases));
+      work ()
+    with _ -> work ()
+  in
+  let _ = Task.async pool work in
+  ()
 
 let init ~replication_role ~dbfilename ~dir () =
   let in_chan = Event.new_channel () in
@@ -295,14 +334,6 @@ let init ~replication_role ~dbfilename ~dir () =
   start redis;
   redis
 
-let handle_command client_id redis command =
-  let out_chan = Event.new_channel () in
-  Event.send redis.in_chan (DatabaseCommand { client_id; command; out_chan })
-  |> Event.sync;
-  Event.receive out_chan |> Event.sync
-
-let to_string redis = Rdb.to_string redis.metadata redis.databases
-
 let of_string str ~dbfilename ~dir =
   let client_table = ClientTable.create 256 in
   let config = { dir; dbfilename; replication = master_state () } in
@@ -315,16 +346,3 @@ let of_string str ~dbfilename ~dir =
   in
   start redis;
   Ok redis
-
-let get_all_metadata redis = redis.metadata |> Hashtbl.to_seq
-
-let connect redis =
-  let chan = Event.new_channel () in
-  Event.send redis.in_chan (ConnectionCommand (Connect chan)) |> Event.sync;
-  Event.receive chan |> Event.sync
-
-let disconnect client_id redis =
-  let chan = Event.new_channel () in
-  Event.send redis.in_chan (ConnectionCommand (Disconnect (client_id, chan)))
-  |> Event.sync;
-  Event.receive chan |> Event.sync

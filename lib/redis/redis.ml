@@ -312,6 +312,7 @@ let start redis =
           | Full_sync (metadata, databases) ->
               redis.metadata <- metadata;
               redis.databases <- databases));
+
       work ()
     with _ -> work ()
   in

@@ -7,7 +7,10 @@ type update = {
   duration : Int64.t option;
 }
 
-type handshaked = { socket : file_descr; mutable updates_buffer : update list }
+type handshaked = {
+  socket : file_descr;
+  in_chan : (update list * Rdb.metadata * Rdb.databases) option Event.channel;
+}
 
 type synced = {
   socket : file_descr;
@@ -16,7 +19,7 @@ type synced = {
 }
 
 type state =
-  | Init
+  | Init of int
   | Handshaked of handshaked
   | Synced of synced
   | Updating of file_descr
@@ -51,9 +54,9 @@ let rdb_sync =
   let open Angstrom in
   let* _ = char '$' in
   let* digits_str = Angstrom.take_while1 is_digit in
-  let nb_chars = int_of_string digits_str in
+  let _nb_chars = int_of_string digits_str in
   let* _ = string "\r\n" in
-  take nb_chars
+  Rdb.rdb
 
 let parse_updates resps now =
   let open Resp in
@@ -93,46 +96,57 @@ let handshake self =
   let _ = write_command ping client_socket in
   let _ = write_command replconf_port client_socket in
   let _ = write_command replconf_capa client_socket in
-  let _ = write_command psync client_socket in
-  let handshaked = { socket = client_socket; updates_buffer = [] } in
-  self.state <- Handshaked handshaked
+  let last_message = write_command psync client_socket in
+  let rdb_string =
+    match String.split_on_char '$' last_message with
+    | [ _full_resync; rdb_str ] -> String.cat "$" rdb_str
+    | _ ->
+        let buffer = Bytes.create 1024 in
+        let bytes_read = Unix.read client_socket buffer 0 1024 in
+        let response = Bytes.sub_string buffer 0 bytes_read in
+        response
+  in
+  (client_socket, rdb_string)
 
 let init ~port ~master_host ~master_port =
-  { port; master_host; master_port; state = Init }
+  { port; master_host; master_port; state = Init 0 }
 
 exception ConnectionLost
 
+let background_sync out_chan response updates () =
+  (let ( let* ) = Result.bind in
+   let* metadata, databases =
+     Angstrom.parse_string ~consume:Angstrom.Consume.All rdb_sync response
+   in
+   Ok (Event.send out_chan (Some (updates, metadata, databases)) |> Event.sync))
+  |> Result.fold ~ok:(fun x -> x) ~error:(fun _ -> ())
+
 let poll self =
+  let max_init = 1024 * 1024 in
   try
     match self.state with
-    | Init ->
-        handshake self;
+    | Init i when i == max_init ->
+        let socket, message = handshake self in
+        let pool = Domainslib.Task.setup_pool ~num_domains:1 () in
+        let in_chan = Event.new_channel () in
+        let _ =
+          Domainslib.Task.async pool (background_sync in_chan message [])
+        in
+        self.state <- Handshaked { socket; in_chan };
+        No_op
+    | Init i ->
+        self.state <- Init (i + 1);
         No_op
     | Handshaked handshaked -> (
-        match select [ handshaked.socket ] [] [] 0.0001 with
-        | [ ready_socket ], _, _ -> (
-            let buffer = Bytes.create 2056 in
-            let bytes_read = Unix.read ready_socket buffer 0 2056 in
-            if bytes_read = 0 then raise ConnectionLost;
-            let response = Bytes.sub_string buffer 0 bytes_read in
-            match Resp.many_of_string response with
-            | Ok resps ->
-                let now = Unix.gettimeofday () *. 1000. |> Int64.of_float in
-                let updates = parse_updates resps now in
-                handshaked.updates_buffer <- updates @ handshaked.updates_buffer;
-                No_op
-            | Error _ ->
-                (let ( let* ) = Result.bind in
-                 let* rdb_string =
-                   Angstrom.parse_string ~consume:Angstrom.Consume.All rdb_sync
-                     response
-                 in
-                 let* metadata, databases = Rdb.of_string rdb_string in
-                 self.state <-
-                   Synced { socket = handshaked.socket; metadata; databases };
-                 Ok (Updates handshaked.updates_buffer))
-                |> Result.fold ~ok:(fun x -> x) ~error:(fun _ -> No_op))
-        | _ -> No_op)
+        match Event.receive handshaked.in_chan |> Event.poll with
+        | Some data -> (
+            match data with
+            | Some (_updates, metadata, databases) ->
+                self.state <-
+                  Synced { socket = handshaked.socket; metadata; databases };
+                Updates []
+            | None -> raise ConnectionLost)
+        | None -> No_op)
     | Synced { socket; metadata; databases } ->
         self.state <- Updating socket;
         Full_sync (metadata, databases)
@@ -150,5 +164,5 @@ let poll self =
                 Updates (parse_updates resps now))
         | _ -> No_op)
   with ConnectionLost ->
-    self.state <- Init;
+    self.state <- Init 0;
     No_op

@@ -109,5 +109,5 @@ let () =
   bind server_socket (ADDR_INET (inet_addr_of_string "127.0.0.1", !port));
   listen server_socket 1;
   let redis = init ~replication_role ~dbfilename:!dbfilename ~dir:!dir () in
-  let pool = Domainslib.Task.setup_pool ~num_domains:4 () in
+  let pool = Domainslib.Task.setup_pool ~num_domains:16 () in
   accept_socket_and_repl pool server_socket redis

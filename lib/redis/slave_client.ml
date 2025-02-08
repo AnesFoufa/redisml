@@ -186,16 +186,16 @@ let rec loop client (in_channel : t) () =
           loop client in_channel ()
       | Psync ->
           psync client;
+          client.state <- Updating;
+          loop client in_channel ()
+      | Updating ->
           (match client.metadata_databases_buffer with
           | Some (metadata, databases) ->
               let out_channel = Event.receive in_channel |> Event.sync in
               Event.send out_channel (Full_sync (metadata, databases))
               |> Event.sync;
-              client.metadata_databases_buffer <- None;
-              client.state <- Updating
+              client.metadata_databases_buffer <- None
           | None -> ());
-          loop client in_channel ()
-      | Updating ->
           if client.updates_buffer |> List.is_empty |> Bool.not then (
             let out_channel = Event.receive in_channel |> Event.sync in
             Event.send out_channel (Updates client.updates_buffer) |> Event.sync;

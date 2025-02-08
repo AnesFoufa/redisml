@@ -89,6 +89,19 @@ let parse_commands resps now =
          | RArray [ RBulkString set; RBulkString key; value ]
            when set |> String.uppercase_ascii |> String.equal "SET" ->
              Some (Update { key; value; now; duration = None })
+         | RArray
+             [
+               RBulkString set;
+               RBulkString key;
+               value;
+               RBulkString px;
+               RBulkString duration;
+             ]
+           when set |> String.uppercase_ascii |> String.equal "SET"
+                && px |> String.uppercase_ascii |> String.equal "PX" ->
+             Some
+               (Update
+                  { key; value; now; duration = Int64.of_string_opt duration })
          | RArray [ RBulkString ping ]
            when ping |> String.uppercase_ascii |> String.equal "PING" ->
              Some Ping

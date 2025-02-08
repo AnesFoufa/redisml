@@ -10,3 +10,4 @@ type t =
 val to_string : t -> string
 val of_string : string -> (t, string) result
 val many_of_string : string -> (t list, string) result
+val resp : t Angstrom.t

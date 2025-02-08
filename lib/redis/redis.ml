@@ -27,6 +27,7 @@ module Command = struct
     | Repl_conf
     | Psync
     | Select of int
+    | Wait
 
   type command_error = NotConnected | NotHandeledBySlave
 end
@@ -191,6 +192,7 @@ let process_command client_channel redis client_id = function
   | Command.Select i ->
       let _ = Handlers.get_database redis i in
       RString "OK"
+  | Wait -> RInteger 0
 
 let handle_database_command redis client_id command response_channel =
   match ClientTable.find_opt redis.client_table client_id with

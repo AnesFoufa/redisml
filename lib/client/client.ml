@@ -23,6 +23,7 @@ let evaluate_command client ~now command redis =
     | Info_replication -> Redis.Command.Info_replication
     | Repl_conf -> Redis.Command.Repl_conf
     | Psync -> Redis.Command.Psync
+    | Wait -> Redis.Command.Wait
   in
   Redis.handle_command client.id redis redis_command
 

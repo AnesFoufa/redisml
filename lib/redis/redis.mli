@@ -37,6 +37,7 @@ module Command : sig
     | Repl_conf
     | Psync
     | Select of int
+    | Wait
 
   type command_error = NotConnected | NotHandeledBySlave
 end

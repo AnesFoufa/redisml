@@ -10,6 +10,7 @@ type t =
   | Info_replication
   | Repl_conf
   | Psync
+  | Wait
 
 let of_resp = function
   | Resp.RArray [ Resp.RBulkString ping ]
@@ -62,4 +63,7 @@ let of_resp = function
   | RArray [ RBulkString psync; RBulkString "?"; RBulkString "-1" ]
     when psync |> String.uppercase_ascii |> String.equal "PSYNC" ->
       Ok Psync
+  | RArray (RBulkString wait :: _)
+    when wait |> String.uppercase_ascii |> String.equal "WAIT" ->
+      Ok Wait
   | _ -> Error "Unknown command"

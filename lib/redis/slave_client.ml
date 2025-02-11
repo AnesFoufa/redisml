@@ -7,8 +7,30 @@ type update = {
   duration : Int64.t option;
 }
 
-type command = Update of update | Ping | Getack
-type state = Pinging | Replconf_capa | Replconf_port | Psync | Updating
+type command =
+  | Update of update
+  | Ping
+  | Getack
+  | Pong
+  | Ok
+  | Full_resync
+  | Rdb_resync of (Rdb.metadata * Rdb.databases)
+
+let write_command command socket =
+  let message = command |> Resp.to_string |> Bytes.of_string in
+  write socket message 0 (Bytes.length message)
+
+let ping socket =
+  let ping_command = Resp.RArray [ Resp.RBulkString "PING" ] in
+  let _ = write_command ping_command socket in
+  ()
+
+type state =
+  | Pinging of unit Debouncer.t
+  | Replconf_capa of unit Debouncer.t
+  | Replconf_port of unit Debouncer.t
+  | Psync of unit Debouncer.t
+  | Updating
 
 type client = {
   port : int;
@@ -38,7 +60,7 @@ let new_client port master_host master_port =
     port;
     master_host;
     master_port;
-    state = Pinging;
+    state = Pinging (Debouncer.init ~seconds:1 ~op:(fun () -> ping socket) ());
     socket;
     updates_buffer = [];
     metadata_databases_buffer = None;
@@ -47,7 +69,8 @@ let new_client port master_host master_port =
 
 let reinit_client client =
   let socket = connect client.master_host client.master_port in
-  client.state <- Pinging;
+  client.state <-
+    Pinging (Debouncer.init ~seconds:1 ~op:(fun () -> ping socket) ());
   client.socket <- socket;
   client.updates_buffer <- [];
   client.metadata_databases_buffer <- None;
@@ -68,10 +91,6 @@ let read_from_socket ready_socket =
   if bytes_read = 0 then raise ConnectionLost;
   Bytes.sub_string buffer 0 bytes_read
 
-let write_command command socket =
-  let message = command |> Resp.to_string |> Bytes.of_string in
-  write socket message 0 (Bytes.length message)
-
 let rdb_sync =
   let is_digit = function '0' .. '9' -> true | _ -> false in
   let open Angstrom in
@@ -81,44 +100,65 @@ let rdb_sync =
   let* _ = string "\r\n" in
   Rdb.rdb
 
-let parse_commands resps now =
+let string_equal_case_insensitive s1 s2 =
+  let upper_s1 = s1 |> String.uppercase_ascii in
+  let upper_s2 = s2 |> String.uppercase_ascii in
+  upper_s1 |> String.equal upper_s2
+
+type master_message = A of Resp.t | B of (Rdb.metadata * Rdb.databases)
+
+let parse_commands now resps =
   let open Resp in
   resps
-  |> List.filter_map (fun resp ->
-         match resp with
-         | RArray [ RBulkString set; RBulkString key; value ]
-           when set |> String.uppercase_ascii |> String.equal "SET" ->
-             Some (Update { key; value; now; duration = None })
-         | RArray
-             [
-               RBulkString set;
-               RBulkString key;
-               value;
-               RBulkString px;
-               RBulkString duration;
-             ]
-           when set |> String.uppercase_ascii |> String.equal "SET"
-                && px |> String.uppercase_ascii |> String.equal "PX" ->
-             Some
-               (Update
-                  { key; value; now; duration = Int64.of_string_opt duration })
-         | RArray [ RBulkString ping ]
-           when ping |> String.uppercase_ascii |> String.equal "PING" ->
-             Some Ping
-         | RArray [ RBulkString replconf; RBulkString getack; RBulkString "*" ]
-           when replconf |> String.uppercase_ascii |> String.equal "REPLCONF"
-                && getack |> String.uppercase_ascii |> String.equal "GETACK" ->
-             Some Getack
-         | _ -> None)
+  |> List.filter_map (fun message ->
+         match message with
+         | A resp -> (
+             match resp with
+             | RString pong when pong |> string_equal_case_insensitive "pong" ->
+                 Some Pong
+             | RString fullresync
+               when fullresync |> String.uppercase_ascii
+                    |> String.starts_with ~prefix:"FULLRESYNC" ->
+                 Some Full_resync
+             | RString ok when string_equal_case_insensitive ok "ok" -> Some Ok
+             | RArray [ RBulkString set; RBulkString key; value ]
+               when string_equal_case_insensitive set "set" ->
+                 Some (Update { key; value; now; duration = None })
+             | RArray
+                 [
+                   RBulkString set;
+                   RBulkString key;
+                   value;
+                   RBulkString px;
+                   RBulkString duration;
+                 ]
+               when string_equal_case_insensitive set "set"
+                    && string_equal_case_insensitive px "px" ->
+                 Some
+                   (Update
+                      {
+                        key;
+                        value;
+                        now;
+                        duration = Int64.of_string_opt duration;
+                      })
+             | RArray [ RBulkString ping ]
+               when string_equal_case_insensitive ping "ping" ->
+                 Some Ping
+             | RArray
+                 [ RBulkString replconf; RBulkString getack; RBulkString "*" ]
+               when string_equal_case_insensitive replconf "replconf"
+                    && string_equal_case_insensitive getack "getack" ->
+                 Some Getack
+             | _ -> None)
+         | B (metadata, databases) -> Some (Rdb_resync (metadata, databases)))
 
-let commands_metadata_databases now =
+let master_messages now =
   let open Angstrom in
-  let* first_resps = many Resp.resp in
-  let* maybe_metadata_databases = option None (rdb_sync >>| fun x -> Some x) in
-  let* last_resps = many Resp.resp in
-  let resps = first_resps @ last_resps in
-  let commands = parse_commands resps now in
-  return (commands, maybe_metadata_databases)
+  let resp_message = Resp.resp >>| fun x -> A x in
+  let rdb_message = rdb_sync >>| fun x -> B x in
+  let messages = many (resp_message <|> rdb_message) in
+  messages >>| parse_commands now
 
 let update_to_resp =
   let open Resp in
@@ -139,62 +179,7 @@ let command_length = function
   | Ping -> 14
   | Getack -> 37
   | Update update -> update_to_resp update |> Resp.to_string |> String.length
-
-let handle_command client command =
-  (match command with
-  | Update update -> client.updates_buffer <- update :: client.updates_buffer
-  | Ping -> ()
-  | Getack ->
-      let open Resp in
-      let processed_bytes = client.processed_bytes |> Int.to_string in
-      let ack_response =
-        RArray
-          [
-            RBulkString "REPLCONF";
-            RBulkString "ACK";
-            RBulkString processed_bytes;
-          ]
-      in
-      let buffer = ack_response |> to_string |> Bytes.of_string in
-      let _ = Unix.write client.socket buffer 0 (Bytes.length buffer) in
-      ());
-  client.processed_bytes <- client.processed_bytes + command_length command
-
-let handle_master_messages client =
-  let commands, maybe_metadata_databases =
-    let master_messages = read_from_socket client.socket in
-    let now = Unix.gettimeofday () *. 1000. |> Int64.of_float in
-
-    Angstrom.parse_string ~consume:Angstrom.Consume.Prefix
-      (commands_metadata_databases now)
-      master_messages
-    |> Result.get_ok
-  in
-  List.iter (handle_command client) commands;
-  match maybe_metadata_databases with
-  | Some (metadata, databases) ->
-      client.metadata_databases_buffer <- Some (metadata, databases)
-  | None -> ()
-
-let psync client =
-  let psync_command =
-    Resp.RArray [ RBulkString "PSYNC"; RBulkString "?"; RBulkString "-1" ]
-  in
-  let _ = write_command psync_command client.socket in
-  ()
-
-let ping socket =
-  let ping_command = Resp.RArray [ Resp.RBulkString "PING" ] in
-  let _ = write_command ping_command socket in
-  ()
-
-let replconf_capa socket =
-  let replconf_capa_command =
-    Resp.RArray
-      [ RBulkString "REPLCONF"; RBulkString "capa"; RBulkString "psync2" ]
-  in
-  let _ = write_command replconf_capa_command socket in
-  ()
+  | _ -> 0
 
 let replconf_port socket port =
   let replconf_capa_command =
@@ -208,6 +193,75 @@ let replconf_port socket port =
   let _ = write_command replconf_capa_command socket in
   ()
 
+let replconf_capa socket =
+  let replconf_capa_command =
+    Resp.RArray
+      [ RBulkString "REPLCONF"; RBulkString "capa"; RBulkString "psync2" ]
+  in
+  let _ = write_command replconf_capa_command socket in
+  ()
+
+let psync socket =
+  let psync_command =
+    Resp.RArray [ RBulkString "PSYNC"; RBulkString "?"; RBulkString "-1" ]
+  in
+  let _ = write_command psync_command socket in
+  ()
+
+let handle_command client command =
+  let new_state =
+    match (command, client.state) with
+    | Update update, _ ->
+        client.updates_buffer <- update :: client.updates_buffer;
+        client.state
+    | Ping, _ -> client.state
+    | Getack, _ ->
+        let open Resp in
+        let processed_bytes = client.processed_bytes |> Int.to_string in
+        let ack_response =
+          RArray
+            [
+              RBulkString "REPLCONF";
+              RBulkString "ACK";
+              RBulkString processed_bytes;
+            ]
+        in
+        let buffer = ack_response |> to_string |> Bytes.of_string in
+        let _ = Unix.write client.socket buffer 0 (Bytes.length buffer) in
+        client.state
+    | Pong, Pinging _ ->
+        Replconf_port
+          (Debouncer.init ~seconds:1
+             ~op:(fun () -> replconf_port client.socket client.port)
+             ())
+    | Ok, Replconf_port _ ->
+        Replconf_capa
+          (Debouncer.init ~seconds:1
+             ~op:(fun () -> replconf_capa client.socket)
+             ())
+    | Ok, Replconf_capa _ ->
+        Psync (Debouncer.init ~seconds:1 ~op:(fun () -> psync client.socket) ())
+    | Full_resync, _ -> Updating
+    | Rdb_resync (metadata, databases), _ ->
+        client.updates_buffer <- [];
+        client.metadata_databases_buffer <- Some (metadata, databases);
+        client.state
+    | _ -> client.state
+  in
+  client.state <- new_state;
+  client.processed_bytes <- client.processed_bytes + command_length command
+
+let handle_master_messages client =
+  let commands =
+    let master_messages_str = read_from_socket client.socket in
+    let now = Unix.gettimeofday () *. 1000. |> Int64.of_float in
+
+    Angstrom.parse_string ~consume:Angstrom.Consume.Prefix (master_messages now)
+      master_messages_str
+    |> Result.get_ok
+  in
+  List.iter (handle_command client) commands
+
 let rec loop client (in_channel : t) () =
   try
     let read_socks, _, _ = select [ client.socket ] [] [] 0.01 in
@@ -216,21 +270,17 @@ let rec loop client (in_channel : t) () =
     let _, write_socks, _ = select [] [ client.socket ] [] 0.01 in
     if write_socks |> List.is_empty |> Bool.not then
       match client.state with
-      | Pinging ->
-          ping client.socket;
-          client.state <- Replconf_port;
+      | Pinging debouncer ->
+          Debouncer.debounce debouncer;
           loop client in_channel ()
-      | Replconf_port ->
-          replconf_port client.socket client.port;
-          client.state <- Replconf_capa;
+      | Replconf_port debouncer ->
+          Debouncer.debounce debouncer;
           loop client in_channel ()
-      | Replconf_capa ->
-          replconf_capa client.socket;
-          client.state <- Psync;
+      | Replconf_capa debouncer ->
+          Debouncer.debounce debouncer;
           loop client in_channel ()
-      | Psync ->
-          psync client;
-          client.state <- Updating;
+      | Psync debouncer ->
+          Debouncer.debounce debouncer;
           loop client in_channel ()
       | Updating ->
           (match client.metadata_databases_buffer with

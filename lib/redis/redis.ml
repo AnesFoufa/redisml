@@ -310,6 +310,7 @@ let start redis =
           match Slave_client.poll slave_client with
           | No_op -> ()
           | Updates updates ->
+              let open Master_command in
               updates
               |> List.iter (fun { key; value; duration; now } ->
                      let _ = Handlers.set ?duration redis 0 key value ~now in

@@ -1,21 +1,5 @@
 open Unix
 
-type update = {
-  key : string;
-  value : Resp.t;
-  now : Int64.t;
-  duration : Int64.t option;
-}
-
-type command =
-  | Update of update
-  | Ping
-  | Getack
-  | Pong
-  | Ok
-  | Full_resync
-  | Rdb_resync of (Rdb.metadata * Rdb.databases)
-
 let write_command command socket =
   let message = command |> Resp.to_string |> Bytes.of_string in
   write socket message 0 (Bytes.length message)
@@ -38,7 +22,7 @@ type client = {
   master_port : int;
   mutable state : state;
   mutable socket : file_descr;
-  mutable updates_buffer : update list;
+  mutable updates_buffer : Master_command.update list;
   mutable metadata_databases_buffer : (Rdb.metadata * Rdb.databases) option;
   mutable processed_bytes : int;
 }
@@ -78,7 +62,7 @@ let reinit_client client =
 
 type message =
   | No_op
-  | Updates of update list
+  | Updates of Master_command.update list
   | Full_sync of (Rdb.metadata * Rdb.databases)
 
 type t = message Event.channel Event.channel
@@ -109,6 +93,7 @@ type master_message = A of Resp.t | B of (Rdb.metadata * Rdb.databases)
 
 let parse_commands now resps =
   let open Resp in
+  let open Master_command in
   resps
   |> List.filter_map (fun message ->
          match message with
@@ -160,27 +145,6 @@ let master_messages now =
   let messages = many (resp_message <|> rdb_message) in
   messages >>| parse_commands now
 
-let update_to_resp =
-  let open Resp in
-  function
-  | { key; value; now = _now; duration = None } ->
-      RArray [ RBulkString "SET"; RBulkString key; value ]
-  | { key; value; now = _now; duration = Some d } ->
-      RArray
-        [
-          RBulkString "SET";
-          RBulkString key;
-          value;
-          RBulkString "px";
-          RBulkString (Int64.to_string d);
-        ]
-
-let command_length = function
-  | Ping -> 14
-  | Getack -> 37
-  | Update update -> update_to_resp update |> Resp.to_string |> String.length
-  | _ -> 0
-
 let replconf_port socket port =
   let replconf_capa_command =
     Resp.RArray
@@ -210,6 +174,7 @@ let psync socket =
 
 let handle_command client command =
   let new_state =
+    let open Master_command in
     match (command, client.state) with
     | Update update, _ ->
         client.updates_buffer <- update :: client.updates_buffer;
@@ -249,7 +214,8 @@ let handle_command client command =
     | _ -> client.state
   in
   client.state <- new_state;
-  client.processed_bytes <- client.processed_bytes + command_length command
+  client.processed_bytes <-
+    client.processed_bytes + Master_command.length command
 
 let handle_master_messages client =
   let commands =

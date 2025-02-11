@@ -1,7 +1,7 @@
 (library
  (name redis)
  (libraries resp angstrom domainslib unix uuidm)
- (modules redis rdb database slave_client debouncer)
- (private_modules rdb slave_client debouncer)
+ (modules redis rdb database slave_client debouncer master_command)
+ (private_modules rdb slave_client debouncer master_command)
  )
 

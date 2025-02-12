@@ -45,6 +45,7 @@ type replication =
       replid : string;
       repl_offset : int;
       slaves : SlavesSet.t ref;
+      mutable processed_bytes : int;
     }
   | SlaveState of {
       master_host : string;
@@ -58,6 +59,7 @@ let master_state () =
       replid = master_replid;
       repl_offset = master_offset;
       slaves = ref SlavesSet.empty;
+      processed_bytes = 0;
     }
 
 type config = { dir : string; dbfilename : string; replication : replication }
@@ -161,10 +163,11 @@ let process_command client_channel redis client_id = function
   | Command.Set { index; key; value; duration; now } ->
       let res = Handlers.set ?duration redis index key value ~now in
       (match redis.config.replication with
-      | MasterState { slaves; _ } ->
-          let message =
-            Resp.RArray [ Resp.RBulkString "SET"; Resp.RBulkString key; value ]
-          in
+      | MasterState ({ slaves; _ } as ms) ->
+          let open Master_command in
+          let set_update = { key; value; duration; now } in
+          let message = update_to_resp set_update in
+          ms.processed_bytes <- ms.processed_bytes + length (Update set_update);
           !slaves
           |> SlavesSet.iter (fun client_id ->
                  let out_chan = ClientTable.find redis.client_table client_id in
@@ -181,7 +184,7 @@ let process_command client_channel redis client_id = function
       RArray [ RBulkString "dbfilename"; RBulkString redis.config.dbfilename ]
   | Command.Psync -> (
       match redis.config.replication with
-      | MasterState { replid; repl_offset; slaves } ->
+      | MasterState { replid; repl_offset; slaves; _ } ->
           let rdb_string =
             Rdb.to_string redis.metadata redis.databases |> format_rdb
           in
@@ -240,7 +243,8 @@ let init_metadata =
 let init_master replid repl_offset dir dbfilename in_chan client_table
     stream_buffer =
   let replication =
-    MasterState { replid; repl_offset; slaves = ref SlavesSet.empty }
+    MasterState
+      { replid; repl_offset; slaves = ref SlavesSet.empty; processed_bytes = 0 }
   in
   let config = { dir; dbfilename; replication } in
   try

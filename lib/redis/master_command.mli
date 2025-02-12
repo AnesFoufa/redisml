@@ -15,3 +15,5 @@ type t =
   | Rdb_resync of (Rdb.metadata * Rdb.databases)
 
 val length : t -> int
+val update_to_resp : update -> Resp.t
+val master_commands : Int64.t -> t list Angstrom.t

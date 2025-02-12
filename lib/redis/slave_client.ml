@@ -24,7 +24,7 @@ type client = {
   mutable socket : file_descr;
   mutable updates_buffer : Master_command.update list;
   mutable metadata_databases_buffer : (Rdb.metadata * Rdb.databases) option;
-  mutable processed_bytes : int;
+  mutable repl_offset : int;
 }
 
 let connect master_host master_port =
@@ -48,7 +48,7 @@ let new_client port master_host master_port =
     socket;
     updates_buffer = [];
     metadata_databases_buffer = None;
-    processed_bytes = 0;
+    repl_offset = 0;
   }
 
 let reinit_client client =
@@ -58,7 +58,7 @@ let reinit_client client =
   client.socket <- socket;
   client.updates_buffer <- [];
   client.metadata_databases_buffer <- None;
-  client.processed_bytes <- 0
+  client.repl_offset <- 0
 
 type message =
   | No_op
@@ -112,7 +112,7 @@ let handle_command client command =
     | Ping, _ -> client.state
     | Getack, _ ->
         let open Resp in
-        let processed_bytes = client.processed_bytes |> Int.to_string in
+        let processed_bytes = client.repl_offset |> Int.to_string in
         let ack_response =
           RArray
             [
@@ -144,8 +144,7 @@ let handle_command client command =
     | _ -> client.state
   in
   client.state <- new_state;
-  client.processed_bytes <-
-    client.processed_bytes + Master_command.length command
+  client.repl_offset <- client.repl_offset + Master_command.length command
 
 let handle_master_messages client =
   let commands =

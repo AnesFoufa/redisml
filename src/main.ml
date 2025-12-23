@@ -102,6 +102,19 @@ let connect_to_master host master_port replica_port =
   let* _ok2 = Lwt_io.read ~count:1024 ic in
   let* () = Lwt_io.eprintlf "Received OK from REPLCONF capa" in
 
+  (* Step 4: Send PSYNC ? -1 (request full sync) *)
+  let psync_cmd = Resp.Array [
+    Resp.BulkString "PSYNC";
+    Resp.BulkString "?";
+    Resp.BulkString "-1"
+  ] in
+  let* () = Lwt_io.write oc (Resp.serialize psync_cmd) in
+  let* () = Lwt_io.flush oc in
+
+  (* Read FULLRESYNC response *)
+  let* _fullresync = Lwt_io.read ~count:1024 ic in
+  let* () = Lwt_io.eprintlf "Received FULLRESYNC from master" in
+
   Lwt.return_unit
 
 (* Start the server *)

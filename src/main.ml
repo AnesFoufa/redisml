@@ -1,5 +1,8 @@
 open Lwt.Syntax
 
+(* Global storage *)
+let storage = Storage.create ()
+
 (* Handle a single command and return the response *)
 let handle_command = function
   | Resp.Array [ Resp.BulkString cmd ] when String.lowercase_ascii cmd = "ping" ->
@@ -9,6 +12,15 @@ let handle_command = function
       match args with
       | [ Resp.BulkString msg ] -> Resp.BulkString msg
       | _ -> Resp.SimpleError "ERR wrong number of arguments for 'echo' command")
+  | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: Resp.BulkString value :: _rest)
+    when String.lowercase_ascii cmd = "set" ->
+      Storage.set storage key value;
+      Resp.SimpleString "OK"
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
+    when String.lowercase_ascii cmd = "get" -> (
+      match Storage.get storage key with
+      | Some value -> Resp.BulkString value
+      | None -> Resp.Null)
   | _ -> Resp.SimpleError "ERR unknown command"
 
 (* Handle a client connection *)

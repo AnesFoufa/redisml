@@ -52,8 +52,8 @@ let handle_connection (ic, oc) =
   loop ()
 
 (* Connect to master and perform handshake *)
-let connect_to_master host port =
-  let* () = Lwt_io.eprintlf "Connecting to master at %s:%d" host port in
+let connect_to_master host master_port replica_port =
+  let* () = Lwt_io.eprintlf "Connecting to master at %s:%d" host master_port in
 
   (* Resolve hostname to IP address *)
   let inet_addr =
@@ -64,17 +64,43 @@ let connect_to_master host port =
       host_entry.Unix.h_addr_list.(0)
   in
 
-  let master_addr = Unix.ADDR_INET (inet_addr, port) in
+  let master_addr = Unix.ADDR_INET (inet_addr, master_port) in
   let* (ic, oc) = Lwt_io.open_connection master_addr in
 
-  (* Send PING *)
+  (* Step 1: Send PING *)
   let ping_cmd = Resp.Array [Resp.BulkString "PING"] in
   let* () = Lwt_io.write oc (Resp.serialize ping_cmd) in
   let* () = Lwt_io.flush oc in
 
   (* Read PONG response *)
-  let* _response = Lwt_io.read ~count:1024 ic in
-  let* () = Lwt_io.eprintlf "Received response from master" in
+  let* _pong = Lwt_io.read ~count:1024 ic in
+  let* () = Lwt_io.eprintlf "Received PONG from master" in
+
+  (* Step 2: Send REPLCONF listening-port *)
+  let replconf_port_cmd = Resp.Array [
+    Resp.BulkString "REPLCONF";
+    Resp.BulkString "listening-port";
+    Resp.BulkString (string_of_int replica_port)
+  ] in
+  let* () = Lwt_io.write oc (Resp.serialize replconf_port_cmd) in
+  let* () = Lwt_io.flush oc in
+
+  (* Read OK response *)
+  let* _ok1 = Lwt_io.read ~count:1024 ic in
+  let* () = Lwt_io.eprintlf "Received OK from REPLCONF listening-port" in
+
+  (* Step 3: Send REPLCONF capa psync2 *)
+  let replconf_capa_cmd = Resp.Array [
+    Resp.BulkString "REPLCONF";
+    Resp.BulkString "capa";
+    Resp.BulkString "psync2"
+  ] in
+  let* () = Lwt_io.write oc (Resp.serialize replconf_capa_cmd) in
+  let* () = Lwt_io.flush oc in
+
+  (* Read OK response *)
+  let* _ok2 = Lwt_io.read ~count:1024 ic in
+  let* () = Lwt_io.eprintlf "Received OK from REPLCONF capa" in
 
   Lwt.return_unit
 
@@ -85,7 +111,7 @@ let start_server config =
   (* If running as replica, connect to master *)
   let* () =
     match config.Config.replicaof with
-    | Some (host, port) -> connect_to_master host port
+    | Some (host, master_port) -> connect_to_master host master_port config.Config.port
     | None -> Lwt.return_unit
   in
 

@@ -10,6 +10,7 @@ type t =
   | Echo of Resp.t
   | Get of Resp.t
   | Set of Resp.t * Resp.t * expiry
+  | Info of Resp.t
 
 (* Parse expiry options for SET command *)
 let parse_expiry = function
@@ -39,6 +40,10 @@ let parse = function
       let expiry, _ = parse_expiry rest in
       Some (Set (key, value, expiry))
 
+  | Resp.Array [ Resp.BulkString cmd; section ]
+    when String.lowercase_ascii cmd = "info" ->
+      Some (Info section)
+
   | _ -> None
 
 (* Calculate Unix timestamp for expiry *)
@@ -65,3 +70,13 @@ let execute cmd storage =
       let expires_at = calculate_expiry expiry in
       Storage.set storage (Resp.serialize key) value expires_at;
       Resp.SimpleString "OK"
+
+  | Info section ->
+      (* Handle INFO command - for now, only replication section *)
+      let section_str = Resp.serialize section |> String.lowercase_ascii in
+      if String.contains section_str 'r' then  (* "replication" *)
+        (* Return replication info as bulk string *)
+        let info = "# Replication\nrole:master\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" in
+        Resp.BulkString info
+      else
+        Resp.BulkString ""

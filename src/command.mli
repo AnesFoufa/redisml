@@ -10,6 +10,7 @@ type t =
   | Echo of Resp.t
   | Get of Resp.t
   | Set of Resp.t * Resp.t * expiry
+  | Info of Resp.t
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option

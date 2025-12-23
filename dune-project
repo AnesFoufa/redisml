@@ -8,10 +8,12 @@
  (name codecrafters_redis)
  (maintainers "CodeCrafters <hello@codecrafters.io>")
  (authors "CodeCrafters <hello@codecrafters.io>")
- (synopsis "Starter code for the Build your own Redis challenge")
+ (synopsis "Redis clone in OCaml using Lwt")
  (homepage "https://codecrafters.io")
  (bug_reports
   "https://github.com/codecrafters-io/build-your-own-redis/issues")
  (license "MIT")
- (allow_empty true)
+ (depends
+  (ocaml (>= 4.14))
+  (dune (>= 3.16)))
  (version 0.1))

@@ -11,6 +11,7 @@ type t =
   | Get of Resp.t
   | Set of Resp.t * Resp.t * expiry
   | Info of Resp.t
+  | Replconf of Resp.t list
 
 (* Parse expiry options for SET command *)
 let parse_expiry = function
@@ -43,6 +44,10 @@ let parse = function
   | Resp.Array [ Resp.BulkString cmd; section ]
     when String.lowercase_ascii cmd = "info" ->
       Some (Info section)
+
+  | Resp.Array (Resp.BulkString cmd :: args)
+    when String.lowercase_ascii cmd = "replconf" ->
+      Some (Replconf args)
 
   | _ -> None
 
@@ -81,3 +86,8 @@ let execute cmd storage config =
         Resp.BulkString info
       else
         Resp.BulkString ""
+
+  | Replconf _args ->
+      (* Handle REPLCONF command - replicas use this during handshake *)
+      (* For now, just acknowledge with OK *)
+      Resp.SimpleString "OK"

@@ -12,6 +12,7 @@ type t =
   | Set of Resp.t * Resp.t * expiry
   | Info of Resp.t
   | Replconf of Resp.t list
+  | Psync of Resp.t * Resp.t
 
 (* Parse expiry options for SET command *)
 let parse_expiry = function
@@ -48,6 +49,10 @@ let parse = function
   | Resp.Array (Resp.BulkString cmd :: args)
     when String.lowercase_ascii cmd = "replconf" ->
       Some (Replconf args)
+
+  | Resp.Array [ Resp.BulkString cmd; replid; offset ]
+    when String.lowercase_ascii cmd = "psync" ->
+      Some (Psync (replid, offset))
 
   | _ -> None
 
@@ -91,3 +96,8 @@ let execute cmd storage config =
       (* Handle REPLCONF command - replicas use this during handshake *)
       (* For now, just acknowledge with OK *)
       Resp.SimpleString "OK"
+
+  | Psync (_replid, _offset) ->
+      (* Handle PSYNC command - replica requesting sync *)
+      (* Return FULLRESYNC with master replid and offset *)
+      Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"

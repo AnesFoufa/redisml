@@ -12,6 +12,7 @@ type t =
   | Set of Resp.t * Resp.t * expiry
   | Info of Resp.t
   | Replconf of Resp.t list
+  | Psync of Resp.t * Resp.t
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option

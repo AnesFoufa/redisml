@@ -1,7 +1,7 @@
 (* In-memory key-value storage with expiry support *)
 
 type item = {
-  value : string;
+  value : Resp.t;
   expires_at : float option; (* Unix timestamp in seconds *)
 }
 

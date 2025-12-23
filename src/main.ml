@@ -3,50 +3,11 @@ open Lwt.Syntax
 (* Global storage *)
 let storage = Storage.create ()
 
-(* Parse SET command with optional PX/EX *)
-let parse_set_command args =
-  match args with
-  | Resp.BulkString key :: Resp.BulkString value :: rest ->
-      (* Parse optional PX or EX *)
-      let expires_at =
-        match rest with
-        | Resp.BulkString opt :: Resp.BulkString time_str :: _ -> (
-            match String.lowercase_ascii opt, int_of_string_opt time_str with
-            | "px", Some milliseconds ->
-                (* PX: expire after N milliseconds *)
-                Some (Unix.gettimeofday () +. (float_of_int milliseconds /. 1000.0))
-            | "ex", Some seconds ->
-                (* EX: expire after N seconds *)
-                Some (Unix.gettimeofday () +. float_of_int seconds)
-            | _ -> None)
-        | _ -> None
-      in
-      Some (key, value, expires_at)
-  | _ -> None
-
 (* Handle a single command and return the response *)
-let handle_command = function
-  | Resp.Array [ Resp.BulkString cmd ] when String.lowercase_ascii cmd = "ping" ->
-      Resp.SimpleString "PONG"
-  | Resp.Array (Resp.BulkString cmd :: args)
-    when String.lowercase_ascii cmd = "echo" -> (
-      match args with
-      | [ Resp.BulkString msg ] -> Resp.BulkString msg
-      | _ -> Resp.SimpleError "ERR wrong number of arguments for 'echo' command")
-  | Resp.Array (Resp.BulkString cmd :: args)
-    when String.lowercase_ascii cmd = "set" -> (
-      match parse_set_command args with
-      | Some (key, value, expires_at) ->
-          Storage.set storage key value expires_at;
-          Resp.SimpleString "OK"
-      | None ->
-          Resp.SimpleError "ERR wrong number of arguments for 'set' command")
-  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
-    when String.lowercase_ascii cmd = "get" -> (
-      match Storage.get storage key with
-      | Some value -> Resp.BulkString value
-      | None -> Resp.Null)
-  | _ -> Resp.SimpleError "ERR unknown command"
+let handle_command resp_cmd =
+  match Command.parse resp_cmd with
+  | Some cmd -> Command.execute cmd storage
+  | None -> Resp.SimpleError "ERR unknown command"
 
 (* Handle a client connection *)
 let handle_connection (ic, oc) =
@@ -90,10 +51,10 @@ let handle_connection (ic, oc) =
   loop ()
 
 (* Start the server *)
-let start_server port =
-  let* () = Lwt_io.eprintlf "Starting Redis server on port %d" port in
+let start_server config =
+  let* () = Lwt_io.eprintlf "Starting Redis server on port %d" config.Config.port in
 
-  let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, port) in
+  let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in
 
   (* Create server that properly handles connections *)
   Lwt_io.establish_server_with_client_address listen_addr (fun _client_addr (ic, oc) ->
@@ -102,10 +63,12 @@ let start_server port =
 
 (* Main entry point *)
 let () =
+  let config = Config.parse_args Sys.argv in
+
   Lwt_main.run (
     Lwt.catch
       (fun () ->
-        let* _server = start_server 6379 in
+        let* _server = start_server config in
         (* Wait forever *)
         let forever, _ = Lwt.wait () in
         forever)

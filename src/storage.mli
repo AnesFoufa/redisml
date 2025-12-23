@@ -3,7 +3,7 @@
 type t
 
 val create : unit -> t
-val set : t -> string -> string -> float option -> unit
-val get : t -> string -> string option
+val set : t -> string -> Resp.t -> float option -> unit
+val get : t -> string -> Resp.t option
 val delete : t -> string -> unit
 val keys : t -> string list

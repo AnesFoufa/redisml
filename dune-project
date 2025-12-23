@@ -15,5 +15,7 @@
  (license "MIT")
  (depends
   (ocaml (>= 4.14))
-  (dune (>= 3.16)))
+  (dune (>= 3.16))
+  (lwt (>= 5.7.0))
+  (lwt_ppx (>= 2.1.0)))
  (version 0.1))

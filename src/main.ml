@@ -3,6 +3,27 @@ open Lwt.Syntax
 (* Global storage *)
 let storage = Storage.create ()
 
+(* Parse SET command with optional PX/EX *)
+let parse_set_command args =
+  match args with
+  | Resp.BulkString key :: Resp.BulkString value :: rest ->
+      (* Parse optional PX or EX *)
+      let expires_at =
+        match rest with
+        | Resp.BulkString opt :: Resp.BulkString time_str :: _ -> (
+            match String.lowercase_ascii opt, int_of_string_opt time_str with
+            | "px", Some milliseconds ->
+                (* PX: expire after N milliseconds *)
+                Some (Unix.gettimeofday () +. (float_of_int milliseconds /. 1000.0))
+            | "ex", Some seconds ->
+                (* EX: expire after N seconds *)
+                Some (Unix.gettimeofday () +. float_of_int seconds)
+            | _ -> None)
+        | _ -> None
+      in
+      Some (key, value, expires_at)
+  | _ -> None
+
 (* Handle a single command and return the response *)
 let handle_command = function
   | Resp.Array [ Resp.BulkString cmd ] when String.lowercase_ascii cmd = "ping" ->
@@ -12,10 +33,14 @@ let handle_command = function
       match args with
       | [ Resp.BulkString msg ] -> Resp.BulkString msg
       | _ -> Resp.SimpleError "ERR wrong number of arguments for 'echo' command")
-  | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: Resp.BulkString value :: _rest)
-    when String.lowercase_ascii cmd = "set" ->
-      Storage.set storage key value;
-      Resp.SimpleString "OK"
+  | Resp.Array (Resp.BulkString cmd :: args)
+    when String.lowercase_ascii cmd = "set" -> (
+      match parse_set_command args with
+      | Some (key, value, expires_at) ->
+          Storage.set storage key value expires_at;
+          Resp.SimpleString "OK"
+      | None ->
+          Resp.SimpleError "ERR wrong number of arguments for 'set' command")
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
     when String.lowercase_ascii cmd = "get" -> (
       match Storage.get storage key with

@@ -53,7 +53,7 @@ let calculate_expiry = function
   | NoExpiry -> None
 
 (* Execute a command against storage *)
-let execute cmd storage =
+let execute cmd storage config =
   match cmd with
   | Ping ->
       Resp.SimpleString "PONG"
@@ -75,8 +75,9 @@ let execute cmd storage =
       (* Handle INFO command - for now, only replication section *)
       let section_str = Resp.serialize section |> String.lowercase_ascii in
       if String.contains section_str 'r' then  (* "replication" *)
-        (* Return replication info as bulk string *)
-        let info = "# Replication\nrole:master\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" in
+        (* Determine role based on config *)
+        let role = if Config.is_replica config then "slave" else "master" in
+        let info = Printf.sprintf "# Replication\nrole:%s\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" role in
         Resp.BulkString info
       else
         Resp.BulkString ""

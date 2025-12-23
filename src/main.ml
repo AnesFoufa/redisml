@@ -1,12 +1,13 @@
 open Lwt.Syntax
 
-(* Global storage *)
+(* Global state *)
 let storage = Storage.create ()
+let config = ref Config.default
 
 (* Handle a single command and return the response *)
 let handle_command resp_cmd =
   match Command.parse resp_cmd with
-  | Some cmd -> Command.execute cmd storage
+  | Some cmd -> Command.execute cmd storage !config
   | None -> Resp.SimpleError "ERR unknown command"
 
 (* Handle a client connection *)
@@ -63,12 +64,12 @@ let start_server config =
 
 (* Main entry point *)
 let () =
-  let config = Config.parse_args Sys.argv in
+  config := Config.parse_args Sys.argv;
 
   Lwt_main.run (
     Lwt.catch
       (fun () ->
-        let* _server = start_server config in
+        let* _server = start_server !config in
         (* Wait forever *)
         let forever, _ = Lwt.wait () in
         forever)

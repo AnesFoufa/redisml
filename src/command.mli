@@ -16,4 +16,4 @@ type t =
 val parse : Resp.t -> t option
 
 (* Execute a command against storage and return response *)
-val execute : t -> Storage.t -> Resp.t
+val execute : t -> Storage.t -> Config.t -> Resp.t

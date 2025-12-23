@@ -51,9 +51,43 @@ let handle_connection (ic, oc) =
   in
   loop ()
 
+(* Connect to master and perform handshake *)
+let connect_to_master host port =
+  let* () = Lwt_io.eprintlf "Connecting to master at %s:%d" host port in
+
+  (* Resolve hostname to IP address *)
+  let inet_addr =
+    try
+      Unix.inet_addr_of_string host
+    with Failure _ ->
+      let host_entry = Unix.gethostbyname host in
+      host_entry.Unix.h_addr_list.(0)
+  in
+
+  let master_addr = Unix.ADDR_INET (inet_addr, port) in
+  let* (ic, oc) = Lwt_io.open_connection master_addr in
+
+  (* Send PING *)
+  let ping_cmd = Resp.Array [Resp.BulkString "PING"] in
+  let* () = Lwt_io.write oc (Resp.serialize ping_cmd) in
+  let* () = Lwt_io.flush oc in
+
+  (* Read PONG response *)
+  let* _response = Lwt_io.read ~count:1024 ic in
+  let* () = Lwt_io.eprintlf "Received response from master" in
+
+  Lwt.return_unit
+
 (* Start the server *)
 let start_server config =
   let* () = Lwt_io.eprintlf "Starting Redis server on port %d" config.Config.port in
+
+  (* If running as replica, connect to master *)
+  let* () =
+    match config.Config.replicaof with
+    | Some (host, port) -> connect_to_master host port
+    | None -> Lwt.return_unit
+  in
 
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in
 

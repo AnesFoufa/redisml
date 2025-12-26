@@ -4,14 +4,47 @@ open Lwt.Syntax
 let storage = Storage.create ()
 let config = ref Config.default
 
+(* Replica tracking *)
+let replicas : Lwt_io.output_channel list ref = ref []
+
 (* Handle a single command and return the response *)
 let handle_command resp_cmd =
   match Command.parse resp_cmd with
   | Some cmd -> Command.execute cmd storage !config
   | None -> Resp.SimpleError "ERR unknown command"
 
+(* Propagate command to all connected replicas *)
+let propagate_to_replicas cmd_resp =
+  let cmd_str = Resp.serialize cmd_resp in
+  let rec send_to_all remaining successful =
+    match remaining with
+    | [] ->
+        replicas := successful;
+        Lwt.return_unit
+    | replica_oc :: rest ->
+        Lwt.catch
+          (fun () ->
+            let* () = Lwt_io.write replica_oc cmd_str in
+            let* () = Lwt_io.flush replica_oc in
+            send_to_all rest (replica_oc :: successful))
+          (fun _exn ->
+            (* Replica disconnected, skip it *)
+            send_to_all rest successful)
+  in
+  send_to_all !replicas []
+
+(* Register a new replica connection *)
+let register_replica oc addr =
+  replicas := oc :: !replicas;
+  Lwt_io.eprintlf "Registered replica from %s" addr
+
 (* Handle a client connection *)
-let handle_connection (ic, oc) =
+let handle_connection client_addr (ic, oc) =
+  let addr_str = match client_addr with
+    | Unix.ADDR_INET (addr, port) ->
+        Printf.sprintf "%s:%d" (Unix.string_of_inet_addr addr) port
+    | Unix.ADDR_UNIX s -> s
+  in
   (* Buffer for incomplete messages *)
   let buffer = ref "" in
 
@@ -36,6 +69,15 @@ let handle_connection (ic, oc) =
                 (* Successfully parsed a command *)
                 buffer := rest;
                 let response = handle_command cmd in
+
+                (* Propagate write commands to replicas if we're the master *)
+                let* () =
+                  match Command.parse cmd with
+                  | Some (Command.Set _) when not (Config.is_replica !config) ->
+                      propagate_to_replicas cmd
+                  | _ -> Lwt.return_unit
+                in
+
                 let response_str = Resp.serialize response in
                 let* () = Lwt_io.write oc response_str in
                 let* () = Lwt_io.flush oc in
@@ -47,7 +89,9 @@ let handle_connection (ic, oc) =
                       (* Send empty RDB file as bulk string *)
                       let rdb_response = Printf.sprintf "$%d\r\n%s" (String.length empty_rdb) empty_rdb in
                       let* () = Lwt_io.write oc rdb_response in
-                      Lwt_io.flush oc
+                      let* () = Lwt_io.flush oc in
+                      (* Register this connection as a replica *)
+                      register_replica oc addr_str
                   | _ -> Lwt.return_unit
                 in
                 process_buffer ()
@@ -60,7 +104,8 @@ let handle_connection (ic, oc) =
           loop ()
         ))
       (fun _exn ->
-        (* Connection error or closed *)
+        (* Connection error or closed - remove from replica list if present *)
+        replicas := List.filter (fun r -> r != oc) !replicas;
         Lwt.return_unit)
   in
   loop ()
@@ -145,8 +190,8 @@ let start_server config =
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in
 
   (* Create server that properly handles connections *)
-  Lwt_io.establish_server_with_client_address listen_addr (fun _client_addr (ic, oc) ->
-      handle_connection (ic, oc)
+  Lwt_io.establish_server_with_client_address listen_addr (fun client_addr (ic, oc) ->
+      handle_connection client_addr (ic, oc)
   )
 
 (* Main entry point *)

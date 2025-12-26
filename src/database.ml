@@ -4,12 +4,14 @@ type t = {
   storage : Storage.t;
   config : Config.t;
   replica_manager : Replica_manager.t;
+  mutable replication_offset : int;  (* Bytes processed from master *)
 }
 
 let create config = {
   storage = Storage.create ();
   config;
   replica_manager = Replica_manager.create ();
+  replication_offset = 0;
 }
 
 let get_config db = db.config
@@ -51,7 +53,7 @@ let execute_command cmd db =
           Resp.Array [
             Resp.BulkString "REPLCONF";
             Resp.BulkString "ACK";
-            Resp.BulkString "0"  (* For now, offset is always 0 *)
+            Resp.BulkString (string_of_int db.replication_offset)
           ]
       | _ ->
           (* For other REPLCONF commands, return OK *)
@@ -105,3 +107,7 @@ let handle_command db cmd ~original_resp ~channel ~address =
       in
 
       Lwt.return_some response
+
+(* Increment replication offset (called when processing commands from master) *)
+let increment_offset db bytes =
+  db.replication_offset <- db.replication_offset + bytes

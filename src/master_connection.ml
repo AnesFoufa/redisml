@@ -137,6 +137,10 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
                     ~channel:oc
                     ~address:"master"
                 in
+                (* Increment replication offset by bytes processed *)
+                let cmd_bytes = String.length (Resp.serialize cmd) in
+                Database.increment_offset database cmd_bytes;
+
                 (* Only send response for REPLCONF commands, not for write commands like SET *)
                 (match parsed_cmd with
                 | Command.Replconf _ ->

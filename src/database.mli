@@ -17,3 +17,6 @@ val handle_command :
   channel:Lwt_io.output_channel ->
   address:string ->
   Resp.t option Lwt.t
+
+(* Increment replication offset (for tracking bytes from master) *)
+val increment_offset : t -> int -> unit

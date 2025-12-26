@@ -130,14 +130,25 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
           let* () =
             match Command.parse cmd with
             | Some parsed_cmd ->
-                (* Execute command locally without sending response *)
-                let* _response_opt =
+                (* Execute command *)
+                let* response_opt =
                   Database.handle_command database parsed_cmd
                     ~original_resp:cmd
                     ~channel:oc
                     ~address:"master"
                 in
-                Lwt.return_unit
+                (* Only send response for REPLCONF commands, not for write commands like SET *)
+                (match parsed_cmd with
+                | Command.Replconf _ ->
+                    (* REPLCONF GETACK needs a response *)
+                    (match response_opt with
+                    | Some resp ->
+                        let* () = Lwt_io.write oc (Resp.serialize resp) in
+                        Lwt_io.flush oc
+                    | None -> Lwt.return_unit)
+                | _ ->
+                    (* No response for SET or other replication commands *)
+                    Lwt.return_unit)
             | None ->
                 (* Ignore unparseable commands from master *)
                 Lwt.return_unit

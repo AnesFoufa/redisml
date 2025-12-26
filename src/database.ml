@@ -44,8 +44,18 @@ let execute_command cmd db =
       let info = Printf.sprintf "# Replication\nrole:%s\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" role in
       Resp.BulkString info
 
-  | Command.Replconf _args ->
-      Resp.SimpleString "OK"
+  | Command.Replconf replconf_cmd -> (
+      match replconf_cmd with
+      | Command.ReplconfGetAck ->
+          (* Respond with REPLCONF ACK <offset> *)
+          Resp.Array [
+            Resp.BulkString "REPLCONF";
+            Resp.BulkString "ACK";
+            Resp.BulkString "0"  (* For now, offset is always 0 *)
+          ]
+      | _ ->
+          (* For other REPLCONF commands, return OK *)
+          Resp.SimpleString "OK")
 
   | Command.Psync (_replid, _offset) ->
       Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"

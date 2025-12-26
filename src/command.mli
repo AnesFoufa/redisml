@@ -1,21 +1,18 @@
 (* Redis command types and execution *)
 
-type expiry =
-  | ExpireMilliseconds of int
-  | ExpireSeconds of int
-  | NoExpiry
+type replconf_command =
+  | ReplconfListeningPort of int
+  | ReplconfCapa of string
+  | ReplconfGetAck
 
 type t =
   | Ping
   | Echo of Resp.t
-  | Get of Resp.t
-  | Set of Resp.t * Resp.t * expiry
-  | Info of Resp.t
-  | Replconf of Resp.t list
-  | Psync of Resp.t * Resp.t
+  | Get of string
+  | Set of string * Resp.t * int option
+  | InfoReplication
+  | Replconf of replconf_command
+  | Psync of string * int
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option
-
-(* Execute a command against storage and return response *)
-val execute : t -> Storage.t -> Config.t -> Resp.t

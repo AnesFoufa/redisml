@@ -1,27 +1,42 @@
 (* Redis command types and execution *)
 
-type expiry =
-  | ExpireMilliseconds of int
-  | ExpireSeconds of int
-  | NoExpiry
+type replconf_command =
+  | ReplconfListeningPort of int
+  | ReplconfCapa of string
+  | ReplconfGetAck
 
 type t =
   | Ping
   | Echo of Resp.t
-  | Get of Resp.t
-  | Set of Resp.t * Resp.t * expiry
-  | Info of Resp.t
-  | Replconf of Resp.t list
-  | Psync of Resp.t * Resp.t
+  | Get of string
+  | Set of string * Resp.t * int option
+  | InfoReplication
+  | Replconf of replconf_command
+  | Psync of string * int
 
-(* Parse expiry options for SET command *)
-let parse_expiry = function
+(* Parse duration options for SET command - returns milliseconds *)
+let parse_duration = function
   | Resp.BulkString opt :: Resp.BulkString time_str :: rest -> (
       match String.lowercase_ascii opt, int_of_string_opt time_str with
-      | "px", Some ms -> ExpireMilliseconds ms, rest
-      | "ex", Some sec -> ExpireSeconds sec, rest
-      | _ -> NoExpiry, rest)
-  | rest -> NoExpiry, rest
+      | "px", Some ms -> Some ms, rest
+      | "ex", Some sec -> Some (sec * 1000), rest
+      | _ -> None, rest)
+  | rest -> None, rest
+
+(* Parse REPLCONF subcommands *)
+let parse_replconf = function
+  | [ Resp.BulkString arg1; Resp.BulkString arg2 ] ->
+      let arg1_str = String.lowercase_ascii arg1 in
+      (match arg1_str with
+       | "listening-port" ->
+           int_of_string_opt arg2
+           |> Option.map (fun port -> Replconf (ReplconfListeningPort port))
+       | "capa" ->
+           Some (Replconf (ReplconfCapa arg2))
+       | "getack" ->
+           Some (Replconf ReplconfGetAck)
+       | _ -> None)
+  | _ -> None
 
 (* Parse a RESP value into a command *)
 let parse = function
@@ -33,71 +48,30 @@ let parse = function
     when String.lowercase_ascii cmd = "echo" ->
       Some (Echo msg)
 
-  | Resp.Array [ Resp.BulkString cmd; key ]
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
     when String.lowercase_ascii cmd = "get" ->
       Some (Get key)
 
-  | Resp.Array (Resp.BulkString cmd :: key :: value :: rest)
+  | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: value :: rest)
     when String.lowercase_ascii cmd = "set" ->
-      let expiry, _ = parse_expiry rest in
-      Some (Set (key, value, expiry))
+      let duration, _ = parse_duration rest in
+      Some (Set (key, value, duration))
 
-  | Resp.Array [ Resp.BulkString cmd; section ]
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString section ]
     when String.lowercase_ascii cmd = "info" ->
-      Some (Info section)
+      if String.contains (String.lowercase_ascii section) 'r' then
+        Some InfoReplication
+      else
+        None
 
   | Resp.Array (Resp.BulkString cmd :: args)
     when String.lowercase_ascii cmd = "replconf" ->
-      Some (Replconf args)
+      parse_replconf args
 
-  | Resp.Array [ Resp.BulkString cmd; replid; offset ]
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString replid; Resp.BulkString offset ]
     when String.lowercase_ascii cmd = "psync" ->
-      Some (Psync (replid, offset))
+      let offset_int = int_of_string_opt offset |> Option.value ~default:(-1) in
+      Some (Psync (replid, offset_int))
 
   | _ -> None
 
-(* Calculate Unix timestamp for expiry *)
-let calculate_expiry = function
-  | ExpireMilliseconds ms -> Some (Unix.gettimeofday () +. (float_of_int ms /. 1000.0))
-  | ExpireSeconds sec -> Some (Unix.gettimeofday () +. float_of_int sec)
-  | NoExpiry -> None
-
-(* Execute a command against storage *)
-let execute cmd storage config =
-  match cmd with
-  | Ping ->
-      Resp.SimpleString "PONG"
-
-  | Echo msg ->
-      msg
-
-  | Get key -> (
-      match Storage.get storage (Resp.serialize key) with
-      | Some resp_value -> resp_value
-      | None -> Resp.Null)
-
-  | Set (key, value, expiry) ->
-      let expires_at = calculate_expiry expiry in
-      Storage.set storage (Resp.serialize key) value expires_at;
-      Resp.SimpleString "OK"
-
-  | Info section ->
-      (* Handle INFO command - for now, only replication section *)
-      let section_str = Resp.serialize section |> String.lowercase_ascii in
-      if String.contains section_str 'r' then  (* "replication" *)
-        (* Determine role based on config *)
-        let role = if Config.is_replica config then "slave" else "master" in
-        let info = Printf.sprintf "# Replication\nrole:%s\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" role in
-        Resp.BulkString info
-      else
-        Resp.BulkString ""
-
-  | Replconf _args ->
-      (* Handle REPLCONF command - replicas use this during handshake *)
-      (* For now, just acknowledge with OK *)
-      Resp.SimpleString "OK"
-
-  | Psync (_replid, _offset) ->
-      (* Handle PSYNC command - replica requesting sync *)
-      (* Return FULLRESYNC with master replid and offset *)
-      Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"

@@ -28,6 +28,7 @@ let start_server () =
     match config.Config.replicaof with
     | Some (host, master_port) ->
         Master_connection.connect_to_master
+          ~database:!database
           ~host
           ~master_port
           ~replica_port:config.Config.port

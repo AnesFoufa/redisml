@@ -17,12 +17,12 @@ let handle_connection ~client_addr ~channels:(ic, oc)
   in
 
   (* Buffer for incomplete messages - use Buffer module instead of string concatenation *)
-  let buffer = Buffer.create 4096 in
+  let buffer = Buffer.create Constants.protocol_read_buffer in
 
   let rec loop () =
     Lwt.catch
       (fun () ->
-        let* data = Lwt_io.read ~count:4096 ic in
+        let* data = Lwt_io.read ~count:Constants.protocol_read_buffer ic in
         if String.length data = 0 then
           (* Connection closed *)
           Lwt.return_unit

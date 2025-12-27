@@ -63,7 +63,7 @@ let wait_for_replicas manager ~num_replicas:_ ~timeout_ms =
     Lwt.return (List.length manager.replicas)
   else (
     (* Small delay to ensure all replica connections are fully established *)
-    let* () = Lwt_unix.sleep 0.05 in
+    let* () = Lwt_unix.sleep Constants.replica_connection_delay_s in
 
     let getack_cmd = Resp.Array [
       Resp.BulkString "REPLCONF";
@@ -82,8 +82,8 @@ let wait_for_replicas manager ~num_replicas:_ ~timeout_ms =
           (* Try to read response with timeout *)
           let read_response () =
             (* Small delay to ensure data arrives *)
-            let* () = Lwt_unix.sleep 0.01 in
-            let* data = Lwt_io.read ~count:1024 replica.ic in
+            let* () = Lwt_unix.sleep Constants.replica_response_delay_s in
+            let* data = Lwt_io.read ~count:Constants.replica_response_buffer replica.ic in
             match Resp.parse data with
             | Some (Resp.Array [Resp.BulkString "REPLCONF"; Resp.BulkString "ACK"; _], _) ->
                 Lwt.return true

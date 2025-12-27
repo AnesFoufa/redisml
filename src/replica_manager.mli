@@ -14,11 +14,14 @@ val register_replica :
   address:string ->
   unit Lwt.t
 
-(* Propagate a command to all connected replicas *)
+(* Propagate a command to all connected replicas (with batching) *)
 val propagate_to_replicas :
   t ->
   command:Resp.t ->
   unit Lwt.t
+
+(* Flush any pending batched commands to replicas *)
+val flush_pending : t -> unit Lwt.t
 
 (* Get the empty RDB file for PSYNC response *)
 val empty_rdb : string

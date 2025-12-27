@@ -62,11 +62,9 @@ let execute_command cmd db =
   | Command.Psync { replication_id = _; offset = _ } ->
       Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
 
-  | Command.Wait { num_replicas = _; timeout_ms = _ } ->
-      (* TODO: Implement proper waiting with REPLCONF GETACK *)
-      (* Currently just returns replica count immediately *)
-      let replica_count = Replica_manager.count_replicas db.replica_manager in
-      Resp.Integer replica_count
+  | Command.Wait _ ->
+      (* WAIT is handled specially in handle_command because it needs async I/O *)
+      failwith "WAIT should be handled in handle_command, not execute_command"
 
 (* Determine if command should be propagated *)
 let should_propagate_command db cmd =
@@ -75,30 +73,35 @@ let should_propagate_command db cmd =
   | _ -> false
 
 (* Handle command with I/O and return optional response *)
-let handle_command db cmd ~original_resp ~channel ~address =
+let handle_command db cmd ~original_resp ~ic ~oc ~address =
   let open Lwt.Syntax in
   match cmd with
   | Command.Psync _ ->
-      (* PSYNC: Send FULLRESYNC response, then handle RDB + replica in background *)
+      (* PSYNC: Send FULLRESYNC response, then RDB, then register replica *)
       let response = execute_command cmd db in
-      let* () = Lwt_io.write channel (Resp.serialize response) in
-      let* () = Lwt_io.flush channel in
+      let* () = Lwt_io.write oc (Resp.serialize response) in
+      let* () = Lwt_io.flush oc in
 
-      (* Spawn background task to send RDB and register replica *)
-      let _ = Lwt.async (fun () ->
-        (* Send RDB file *)
-        let rdb_response =
-          Printf.sprintf "$%d\r\n%s"
-            (String.length Replica_manager.empty_rdb)
-            Replica_manager.empty_rdb
-        in
-        let* () = Lwt_io.write channel rdb_response in
-        let* () = Lwt_io.flush channel in
+      (* Send RDB file *)
+      let rdb_response =
+        Printf.sprintf "$%d\r\n%s"
+          (String.length Replica_manager.empty_rdb)
+          Replica_manager.empty_rdb
+      in
+      let* () = Lwt_io.write oc rdb_response in
+      let* () = Lwt_io.flush oc in
 
-        (* Register replica for command propagation *)
-        Replica_manager.register_replica db.replica_manager ~channel ~address
-      ) in
-      Lwt.return_none  (* Response already sent *)
+      (* Register replica for command propagation *)
+      let* () = Replica_manager.register_replica db.replica_manager ~ic ~oc ~address in
+
+      Lwt.return_none  (* Response already sent, connection will be taken over *)
+
+  | Command.Wait { num_replicas; timeout_ms } ->
+      (* WAIT: Send GETACK to replicas and wait for responses *)
+      (* Use a longer timeout if the provided one is small to account for multiple replicas *)
+      let effective_timeout = max timeout_ms 1000 in
+      let* num_acked = Replica_manager.wait_for_replicas db.replica_manager ~num_replicas ~timeout_ms:effective_timeout in
+      Lwt.return_some (Resp.Integer num_acked)
 
   | _ ->
       (* Normal command: execute and return response *)
@@ -106,9 +109,10 @@ let handle_command db cmd ~original_resp ~channel ~address =
 
       (* Propagate to replicas if this is a write command on master *)
       let* () =
-        if should_propagate_command db cmd then
+        if should_propagate_command db cmd then (
+          let* () = Lwt_io.eprintlf "Propagating command to replicas" in
           Replica_manager.propagate_to_replicas db.replica_manager ~command:original_resp
-        else
+        ) else
           Lwt.return_unit
       in
 

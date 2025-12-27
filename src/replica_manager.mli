@@ -9,7 +9,8 @@ val create : unit -> t
 (* Register a new replica connection *)
 val register_replica :
   t ->
-  channel:Lwt_io.output_channel ->
+  ic:Lwt_io.input_channel ->
+  oc:Lwt_io.output_channel ->
   address:string ->
   unit Lwt.t
 
@@ -25,8 +26,15 @@ val empty_rdb : string
 (* Remove a replica from tracking (called on disconnect) *)
 val remove_replica :
   t ->
-  channel:Lwt_io.output_channel ->
+  oc:Lwt_io.output_channel ->
   unit
 
 (* Count connected replicas *)
 val count_replicas : t -> int
+
+(* Wait for replicas to acknowledge - returns number that responded within timeout *)
+val wait_for_replicas :
+  t ->
+  num_replicas:int ->
+  timeout_ms:int ->
+  int Lwt.t

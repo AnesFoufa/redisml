@@ -1,7 +1,10 @@
 open Lwt.Syntax
 
+(* Exception to signal that connection should be handed over to replication *)
+exception Replication_takeover
+
 (* Callback types *)
-type command_handler = Resp.t -> Lwt_io.output_channel -> string -> unit Lwt.t
+type command_handler = Resp.t -> Lwt_io.input_channel -> Lwt_io.output_channel -> string -> unit Lwt.t
 
 (* Handle a client connection *)
 let handle_connection ~client_addr ~channels:(ic, oc)
@@ -35,7 +38,7 @@ let handle_connection ~client_addr ~channels:(ic, oc)
                 buffer := rest;
 
                 (* Execute command - handler sends response *)
-                let* () = command_handler cmd oc addr_str in
+                let* () = command_handler cmd ic oc addr_str in
 
                 process_buffer ()
             | None ->
@@ -46,8 +49,15 @@ let handle_connection ~client_addr ~channels:(ic, oc)
           let* () = process_buffer () in
           loop ()
         ))
-      (fun _exn ->
-        (* Connection error or closed *)
-        Lwt.return_unit)
+      (fun exn ->
+        match exn with
+        | Replication_takeover ->
+            (* Connection is now a replica - keep channels open but stop reading *)
+            (* Sleep forever without closing connection *)
+            let forever, _ = Lwt.wait () in
+            forever
+        | _ ->
+            (* Connection error or closed *)
+            Lwt.return_unit)
   in
   loop ()

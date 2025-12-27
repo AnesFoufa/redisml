@@ -14,7 +14,8 @@ val handle_command :
   t ->
   Command.t ->
   original_resp:Resp.t ->
-  channel:Lwt_io.output_channel ->
+  ic:Lwt_io.input_channel ->
+  oc:Lwt_io.output_channel ->
   address:string ->
   Resp.t option Lwt.t
 

@@ -134,7 +134,8 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
                 let* response_opt =
                   Database.handle_command database parsed_cmd
                     ~original_resp:cmd
-                    ~channel:oc
+                    ~ic
+                    ~oc
                     ~address:"master"
                 in
                 (* Increment replication offset by bytes processed *)

@@ -4,16 +4,20 @@ open Lwt.Syntax
 let database = ref (Database.create Config.default)
 
 (* Handle a single command - delegates to Database module *)
-let handle_command resp_cmd oc addr =
+let handle_command resp_cmd ic oc addr =
   let open Lwt.Syntax in
   match Command.parse resp_cmd with
   | Some cmd ->
-      let* response_opt = Database.handle_command !database cmd ~original_resp:resp_cmd ~channel:oc ~address:addr in
-      (match response_opt with
-       | Some resp ->
+      let* response_opt = Database.handle_command !database cmd ~original_resp:resp_cmd ~ic ~oc ~address:addr in
+      (match response_opt, cmd with
+       | None, Command.Psync _ ->
+           (* PSYNC completed - pause protocol handler to avoid reading ACK responses *)
+           raise Protocol.Replication_takeover
+       | Some resp, _ ->
            let* () = Lwt_io.write oc (Resp.serialize resp) in
            Lwt_io.flush oc
-       | None -> Lwt.return_unit)  (* Silent - response already sent *)
+       | None, _ ->
+           Lwt.return_unit)  (* Silent - response already sent *)
   | None ->
       let* () = Lwt_io.write oc (Resp.serialize (Resp.SimpleError "ERR unknown command")) in
       Lwt_io.flush oc

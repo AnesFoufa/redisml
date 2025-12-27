@@ -60,7 +60,7 @@ let execute_command cmd db =
         | Master _ -> "master"
         | Replica _ -> "slave"
       in
-      let info = Printf.sprintf "# Replication\nrole:%s\nmaster_replid:8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb\nmaster_repl_offset:0" role_str in
+      let info = Printf.sprintf "# Replication\nrole:%s\nmaster_replid:%s\nmaster_repl_offset:%d" role_str Constants.master_repl_id Constants.master_repl_offset in
       Resp.BulkString info
 
   | Command.Replconf replconf_cmd -> (
@@ -83,7 +83,7 @@ let execute_command cmd db =
   | Command.Psync { replication_id = _; offset = _ } ->
       (match db.role with
        | Master _ ->
-           Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
+           Resp.SimpleString (Printf.sprintf "FULLRESYNC %s %d" Constants.master_repl_id Constants.master_repl_offset)
        | Replica _ ->
            Resp.SimpleError "ERR PSYNC not allowed on replica")
 
@@ -131,7 +131,7 @@ let handle_command db cmd ~original_resp ~ic ~oc ~address =
       (match db.role with
        | Master replica_manager ->
            (* Use a longer timeout if the provided one is small to account for multiple replicas *)
-           let effective_timeout = max timeout_ms 1000 in
+           let effective_timeout = max timeout_ms Constants.min_wait_timeout_ms in
            let* num_acked = Replica_manager.wait_for_replicas replica_manager ~num_replicas ~timeout_ms:effective_timeout in
            Lwt.return_some (Resp.Integer num_acked)
 

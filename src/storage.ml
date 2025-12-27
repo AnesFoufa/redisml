@@ -10,7 +10,7 @@ type t = {
 }
 
 let create () = {
-  data = Hashtbl.create 1024;
+  data = Hashtbl.create Constants.initial_storage_capacity;
 }
 
 let set storage key value expires_at =

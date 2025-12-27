@@ -5,15 +5,31 @@ type replconf_command =
   | ReplconfCapa of string
   | ReplconfGetAck
 
+type set_params = {
+  key: string;
+  value: Resp.t;
+  expiry_ms: int option;
+}
+
+type psync_params = {
+  replication_id: string;
+  offset: int;
+}
+
+type wait_params = {
+  num_replicas: int;
+  timeout_ms: int;
+}
+
 type t =
   | Ping
   | Echo of Resp.t
   | Get of string
-  | Set of string * Resp.t * int option
+  | Set of set_params
   | InfoReplication
   | Replconf of replconf_command
-  | Psync of string * int
-  | Wait of int * int
+  | Psync of psync_params
+  | Wait of wait_params
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option

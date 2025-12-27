@@ -5,15 +5,31 @@ type replconf_command =
   | ReplconfCapa of string
   | ReplconfGetAck
 
+type set_params = {
+  key: string;
+  value: Resp.t;
+  expiry_ms: int option;
+}
+
+type psync_params = {
+  replication_id: string;
+  offset: int;
+}
+
+type wait_params = {
+  num_replicas: int;
+  timeout_ms: int;
+}
+
 type t =
   | Ping
   | Echo of Resp.t
   | Get of string
-  | Set of string * Resp.t * int option
+  | Set of set_params
   | InfoReplication
   | Replconf of replconf_command
-  | Psync of string * int
-  | Wait of int * int  (* numreplicas, timeout_ms *)
+  | Psync of psync_params
+  | Wait of wait_params
 
 (* Parse duration options for SET command - returns milliseconds *)
 let parse_duration = function
@@ -55,8 +71,8 @@ let parse = function
 
   | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: value :: rest)
     when String.lowercase_ascii cmd = "set" ->
-      let duration, _ = parse_duration rest in
-      Some (Set (key, value, duration))
+      let expiry_ms, _ = parse_duration rest in
+      Some (Set { key; value; expiry_ms })
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString section ]
     when String.lowercase_ascii cmd = "info" ->
@@ -69,15 +85,15 @@ let parse = function
     when String.lowercase_ascii cmd = "replconf" ->
       parse_replconf args
 
-  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString replid; Resp.BulkString offset ]
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString replication_id; Resp.BulkString offset_str ]
     when String.lowercase_ascii cmd = "psync" ->
-      let offset_int = int_of_string_opt offset |> Option.value ~default:(-1) in
-      Some (Psync (replid, offset_int))
+      let offset = int_of_string_opt offset_str |> Option.value ~default:(-1) in
+      Some (Psync { replication_id; offset })
 
-  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString numreplicas; Resp.BulkString timeout ]
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString num_replicas_str; Resp.BulkString timeout_str ]
     when String.lowercase_ascii cmd = "wait" ->
-      (match int_of_string_opt numreplicas, int_of_string_opt timeout with
-       | Some n, Some t -> Some (Wait (n, t))
+      (match int_of_string_opt num_replicas_str, int_of_string_opt timeout_str with
+       | Some num_replicas, Some timeout_ms -> Some (Wait { num_replicas; timeout_ms })
        | _ -> None)
 
   | _ -> None

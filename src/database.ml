@@ -33,8 +33,8 @@ let execute_command cmd db =
       | Some resp_value -> resp_value
       | None -> Resp.Null)
 
-  | Command.Set (key, value, duration_ms) ->
-      let expires_at = match duration_ms with
+  | Command.Set { key; value; expiry_ms } ->
+      let expires_at = match expiry_ms with
         | Some ms -> Some (Unix.gettimeofday () +. (float ms /. 1000.0))
         | None -> None
       in
@@ -59,11 +59,12 @@ let execute_command cmd db =
           (* For other REPLCONF commands, return OK *)
           Resp.SimpleString "OK")
 
-  | Command.Psync (_replid, _offset) ->
+  | Command.Psync { replication_id = _; offset = _ } ->
       Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
 
-  | Command.Wait (_numreplicas, _timeout_ms) ->
-      (* Return the number of replicas that have acknowledged *)
+  | Command.Wait { num_replicas = _; timeout_ms = _ } ->
+      (* TODO: Implement proper waiting with REPLCONF GETACK *)
+      (* Currently just returns replica count immediately *)
       let replica_count = Replica_manager.count_replicas db.replica_manager in
       Resp.Integer replica_count
 

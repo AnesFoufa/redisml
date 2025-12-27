@@ -1,0 +1,12 @@
+(include_subdirs no)
+
+(executable
+ (name database_test)
+ (libraries codecrafters_redis alcotest str)
+ (modules database_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps database_test.exe)
+ (action (run %{exe:database_test.exe})))

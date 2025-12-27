@@ -27,3 +27,6 @@ val remove_replica :
   t ->
   channel:Lwt_io.output_channel ->
   unit
+
+(* Count connected replicas *)
+val count_replicas : t -> int

@@ -13,6 +13,7 @@ type t =
   | InfoReplication
   | Replconf of replconf_command
   | Psync of string * int
+  | Wait of int * int  (* numreplicas, timeout_ms *)
 
 (* Parse duration options for SET command - returns milliseconds *)
 let parse_duration = function
@@ -72,6 +73,12 @@ let parse = function
     when String.lowercase_ascii cmd = "psync" ->
       let offset_int = int_of_string_opt offset |> Option.value ~default:(-1) in
       Some (Psync (replid, offset_int))
+
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString numreplicas; Resp.BulkString timeout ]
+    when String.lowercase_ascii cmd = "wait" ->
+      (match int_of_string_opt numreplicas, int_of_string_opt timeout with
+       | Some n, Some t -> Some (Wait (n, t))
+       | _ -> None)
 
   | _ -> None
 

@@ -62,6 +62,11 @@ let execute_command cmd db =
   | Command.Psync (_replid, _offset) ->
       Resp.SimpleString "FULLRESYNC 8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb 0"
 
+  | Command.Wait (_numreplicas, _timeout_ms) ->
+      (* Return the number of replicas that have acknowledged *)
+      let replica_count = Replica_manager.count_replicas db.replica_manager in
+      Resp.Integer replica_count
+
 (* Determine if command should be propagated *)
 let should_propagate_command db cmd =
   match cmd with

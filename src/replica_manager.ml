@@ -38,3 +38,7 @@ let register_replica manager ~channel ~address =
 (* Remove a replica from tracking *)
 let remove_replica manager ~channel =
   manager.replicas <- List.filter (fun r -> r != channel) manager.replicas
+
+(* Count connected replicas *)
+let count_replicas manager =
+  List.length manager.replicas

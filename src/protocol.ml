@@ -16,8 +16,8 @@ let handle_connection ~client_addr ~channels:(ic, oc)
     | Unix.ADDR_UNIX s -> s
   in
 
-  (* Buffer for incomplete messages *)
-  let buffer = ref "" in
+  (* Buffer for incomplete messages - use Buffer module instead of string concatenation *)
+  let buffer = Buffer.create 4096 in
 
   let rec loop () =
     Lwt.catch
@@ -28,14 +28,16 @@ let handle_connection ~client_addr ~channels:(ic, oc)
           Lwt.return_unit
         else (
           (* Add to buffer *)
-          buffer := !buffer ^ data;
+          Buffer.add_string buffer data;
 
           (* Try to parse and process commands from buffer *)
           let rec process_buffer () =
-            match Resp.parse !buffer with
+            let contents = Buffer.contents buffer in
+            match Resp.parse contents with
             | Some (cmd, rest) ->
                 (* Successfully parsed a command *)
-                buffer := rest;
+                Buffer.clear buffer;
+                Buffer.add_string buffer rest;
 
                 (* Execute command - handler sends response *)
                 let* () = command_handler cmd ic oc addr_str in

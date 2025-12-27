@@ -1,4 +1,5 @@
 open Lwt.Syntax
+open Codecrafters_redis
 
 (* Global database state *)
 let database = ref (Database.create Config.default)

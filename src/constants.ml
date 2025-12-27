@@ -13,3 +13,8 @@ let min_wait_timeout_ms = 1000
 let protocol_read_buffer = 4096
 let replica_response_buffer = 1024
 let initial_storage_capacity = 1024
+
+(* Replication batching *)
+let batch_max_commands = 100        (* Max commands to batch before flushing *)
+let batch_max_delay_ms = 10.0       (* Max delay before flushing (milliseconds) *)
+let batch_max_bytes = 16384         (* Max bytes to batch before flushing *)

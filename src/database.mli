@@ -13,6 +13,7 @@ val get_config : t -> Config.t
 val handle_command :
   t ->
   Command.t ->
+  current_time:float ->
   original_resp:Resp.t ->
   ic:Lwt_io.input_channel ->
   oc:Lwt_io.output_channel ->
@@ -23,6 +24,6 @@ val handle_command :
 val increment_offset : t -> int -> unit
 
 (* For testing only *)
-val execute_command : Command.t -> t -> Resp.t
+val execute_command : Command.t -> t -> current_time:float -> Resp.t
 val should_propagate_command : t -> Command.t -> bool
 val is_replica : t -> bool

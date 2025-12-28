@@ -2,7 +2,7 @@
 
 type t
 
-val create : ?capacity:int -> unit -> t
+val create : ?capacity:int -> ?get_time:(unit -> float) -> unit -> t
 val set : t -> string -> Resp.t -> float option -> unit
 val get : t -> string -> Resp.t option
 val delete : t -> string -> unit

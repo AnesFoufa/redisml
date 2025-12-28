@@ -21,3 +21,14 @@
  (alias runtest)
  (deps storage_test.exe)
  (action (run %{exe:storage_test.exe})))
+
+(executable
+ (name resp_test)
+ (libraries codecrafters_redis alcotest)
+ (modules resp_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps resp_test.exe)
+ (action (run %{exe:resp_test.exe})))

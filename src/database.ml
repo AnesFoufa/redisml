@@ -89,7 +89,7 @@ let execute_command cmd db =
 
   | Command.Wait _ ->
       (* WAIT is handled specially in handle_command because it needs async I/O *)
-      failwith "WAIT should be handled in handle_command, not execute_command"
+      Resp.SimpleError "ERR WAIT must be handled via handle_command"
 
 (* Determine if command should be propagated *)
 let should_propagate_command db cmd =
@@ -160,4 +160,6 @@ let increment_offset db bytes =
   | Replica state ->
       state.replication_offset <- state.replication_offset + bytes
   | Master _ ->
-      failwith "BUG: increment_offset called on master database"
+      (* This should never happen - it's a programming error, not a user error *)
+      (* Log the error but don't crash the server *)
+      Printf.eprintf "BUG: increment_offset called on master database\n%!"

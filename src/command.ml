@@ -1,5 +1,11 @@
 (* Redis command types and execution *)
 
+(* Validation errors for command parameters *)
+type validation_error =
+  | InvalidExpiry of int
+  | InvalidPort of int
+  | InvalidTimeout of int
+
 type replconf_command =
   | ReplconfListeningPort of int
   | ReplconfCapa of string
@@ -31,6 +37,26 @@ type t =
   | Psync of psync_params
   | Wait of wait_params
 
+(* Validation functions *)
+let validate_set_params params =
+  match params.expiry_ms with
+  | Some ms when ms < 0 -> Error (InvalidExpiry ms)
+  | _ -> Ok ()
+
+let validate_replconf_port port =
+  if port < 1 || port > 65535 then
+    Error (InvalidPort port)
+  else
+    Ok ()
+
+let validate_wait_params params =
+  if params.timeout_ms < 0 then
+    Error (InvalidTimeout params.timeout_ms)
+  else if params.num_replicas < 0 then
+    Error (InvalidTimeout params.num_replicas) (* Reuse InvalidTimeout for simplicity *)
+  else
+    Ok ()
+
 (* Parse duration options for SET command - returns milliseconds *)
 let parse_duration = function
   | Resp.BulkString opt :: Resp.BulkString time_str :: rest -> (
@@ -46,8 +72,12 @@ let parse_replconf = function
       let arg1_str = String.lowercase_ascii arg1 in
       (match arg1_str with
        | "listening-port" ->
-           int_of_string_opt arg2
-           |> Option.map (fun port -> Replconf (ReplconfListeningPort port))
+           (match int_of_string_opt arg2 with
+            | Some port ->
+                (match validate_replconf_port port with
+                 | Ok () -> Some (Replconf (ReplconfListeningPort port))
+                 | Error _ -> None) (* Reject invalid port *)
+            | None -> None)
        | "capa" ->
            Some (Replconf (ReplconfCapa arg2))
        | "getack" ->
@@ -72,7 +102,10 @@ let parse = function
   | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: value :: rest)
     when String.lowercase_ascii cmd = "set" ->
       let expiry_ms, _ = parse_duration rest in
-      Some (Set { key; value; expiry_ms })
+      let params = { key; value; expiry_ms } in
+      (match validate_set_params params with
+       | Ok () -> Some (Set params)
+       | Error _ -> None) (* Reject invalid expiry *)
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString section ]
     when String.lowercase_ascii cmd = "info" ->
@@ -93,7 +126,11 @@ let parse = function
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString num_replicas_str; Resp.BulkString timeout_str ]
     when String.lowercase_ascii cmd = "wait" ->
       (match int_of_string_opt num_replicas_str, int_of_string_opt timeout_str with
-       | Some num_replicas, Some timeout_ms -> Some (Wait { num_replicas; timeout_ms })
+       | Some num_replicas, Some timeout_ms ->
+           let params = { num_replicas; timeout_ms } in
+           (match validate_wait_params params with
+            | Ok () -> Some (Wait params)
+            | Error _ -> None) (* Reject invalid timeout or num_replicas *)
        | _ -> None)
 
   | _ -> None

@@ -8,88 +8,102 @@ type t =
   | Array of t list
   | Null
 
-(* Parse a CRLF-terminated line from a string *)
-let parse_line s =
-  match String.index_opt s '\r' with
-  | Some pos when pos + 1 < String.length s && s.[pos + 1] = '\n' ->
-      let line = String.sub s 0 pos in
-      let rest = String.sub s (pos + 2) (String.length s - pos - 2) in
-      Some (line, rest)
-  | _ -> None
+(* Parse a CRLF-terminated line from a string starting at offset *)
+let parse_line_at s offset =
+  let rec find_crlf pos =
+    if pos + 1 >= String.length s then None
+    else if s.[pos] = '\r' && s.[pos + 1] = '\n' then Some pos
+    else find_crlf (pos + 1)
+  in
+  match find_crlf offset with
+  | Some crlf_pos ->
+      let line = String.sub s offset (crlf_pos - offset) in
+      Some (line, crlf_pos + 2)  (* Return line and position after CRLF *)
+  | None -> None
 
 (* Parse an integer from a string *)
 let parse_int s =
   try Some (int_of_string s) with Failure _ -> None
 
-(* Parse a RESP value from a string *)
-let rec parse s =
-  if String.length s = 0 then None
+(* Internal: Parse RESP value starting at offset, return (value, next_offset) *)
+let rec parse_at s offset =
+  if offset >= String.length s then None
   else
-    match s.[0] with
-    | '+' -> parse_simple_string (String.sub s 1 (String.length s - 1))
-    | '-' -> parse_simple_error (String.sub s 1 (String.length s - 1))
-    | ':' -> parse_integer (String.sub s 1 (String.length s - 1))
-    | '$' -> parse_bulk_string (String.sub s 1 (String.length s - 1))
-    | '*' -> parse_array (String.sub s 1 (String.length s - 1))
+    match s.[offset] with
+    | '+' -> parse_simple_string_at s (offset + 1)
+    | '-' -> parse_simple_error_at s (offset + 1)
+    | ':' -> parse_integer_at s (offset + 1)
+    | '$' -> parse_bulk_string_at s (offset + 1)
+    | '*' -> parse_array_at s (offset + 1)
     | _ -> None
 
-and parse_simple_string s =
-  match parse_line s with
-  | Some (line, rest) -> Some (SimpleString line, rest)
+and parse_simple_string_at s offset =
+  match parse_line_at s offset with
+  | Some (line, next_offset) -> Some (SimpleString line, next_offset)
   | None -> None
 
-and parse_simple_error s =
-  match parse_line s with
-  | Some (line, rest) -> Some (SimpleError line, rest)
+and parse_simple_error_at s offset =
+  match parse_line_at s offset with
+  | Some (line, next_offset) -> Some (SimpleError line, next_offset)
   | None -> None
 
-and parse_integer s =
-  match parse_line s with
-  | Some (line, rest) -> (
+and parse_integer_at s offset =
+  match parse_line_at s offset with
+  | Some (line, next_offset) -> (
       match parse_int line with
-      | Some n -> Some (Integer n, rest)
+      | Some n -> Some (Integer n, next_offset)
       | None -> None)
   | None -> None
 
-and parse_bulk_string s =
-  match parse_line s with
-  | Some (len_str, rest) -> (
+and parse_bulk_string_at s offset =
+  match parse_line_at s offset with
+  | Some (len_str, next_offset) -> (
       match parse_int len_str with
       | Some len when len < 0 ->
           (* Null bulk string *)
-          Some (Null, rest)
+          Some (Null, next_offset)
       | Some len ->
-          if String.length rest >= len + 2 then
-            let data = String.sub rest 0 len in
-            let rest' = String.sub rest (len + 2) (String.length rest - len - 2) in
-            Some (BulkString data, rest')
+          if next_offset + len + 2 <= String.length s then
+            let data = String.sub s next_offset len in
+            Some (BulkString data, next_offset + len + 2)
           else None
       | None -> None)
   | None -> None
 
-and parse_array s =
-  match parse_line s with
-  | Some (len_str, rest) -> (
+and parse_array_at s offset =
+  match parse_line_at s offset with
+  | Some (len_str, next_offset) -> (
       match parse_int len_str with
-      | Some len -> parse_array_elements len rest []
+      | Some len -> parse_array_elements_at s len next_offset []
       | None -> None)
   | None -> None
 
-and parse_array_elements count rest acc =
-  if count = 0 then Some (Array (List.rev acc), rest)
+and parse_array_elements_at s count offset acc =
+  if count = 0 then Some (Array (List.rev acc), offset)
   else
-    match parse rest with
-    | Some (elem, rest') -> parse_array_elements (count - 1) rest' (elem :: acc)
+    match parse_at s offset with
+    | Some (elem, next_offset) ->
+        parse_array_elements_at s (count - 1) next_offset (elem :: acc)
     | None -> None
+
+(* Public API: Parse RESP value from string, return (value, remaining_string) *)
+let parse s =
+  match parse_at s 0 with
+  | Some (value, next_offset) ->
+      let remaining = String.sub s next_offset (String.length s - next_offset) in
+      Some (value, remaining)
+  | None -> None
 
 (* Parse multiple RESP values from a string, return parsed values and remainder *)
 let parse_many s =
-  let rec loop acc rest =
-    match parse rest with
-    | Some (value, rest') -> loop (value :: acc) rest'
-    | None -> (List.rev acc, rest)
+  let rec loop acc offset =
+    match parse_at s offset with
+    | Some (value, next_offset) -> loop (value :: acc) next_offset
+    | None ->
+        let remaining = String.sub s offset (String.length s - offset) in
+        (List.rev acc, remaining)
   in
-  loop [] s
+  loop [] 0
 
 (* Serialize a RESP value to a string *)
 let rec serialize = function

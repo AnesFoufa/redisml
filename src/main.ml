@@ -9,7 +9,8 @@ let handle_command resp_cmd ic oc addr =
   let open Lwt.Syntax in
   match Command.parse resp_cmd with
   | Some cmd ->
-      let* response_opt = Database.handle_command !database cmd ~original_resp:resp_cmd ~ic ~oc ~address:addr in
+      let current_time = Unix.gettimeofday () in
+      let* response_opt = Database.handle_command !database cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address:addr in
       (match response_opt, cmd with
        | None, Command.Psync _ ->
            (* PSYNC completed - pause protocol handler to avoid reading ACK responses *)

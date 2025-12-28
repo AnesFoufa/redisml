@@ -131,8 +131,10 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
             match Command.parse cmd with
             | Some parsed_cmd ->
                 (* Execute command *)
+                let current_time = Unix.gettimeofday () in
                 let* response_opt =
                   Database.handle_command database parsed_cmd
+                    ~current_time
                     ~original_resp:cmd
                     ~ic
                     ~oc

@@ -33,7 +33,7 @@ let is_replica db =
   | Master _ -> false
 
 (* Execute a command and return response *)
-let execute_command cmd db =
+let execute_command cmd db ~current_time =
   let storage = db.storage in
   match cmd with
   | Command.Ping ->
@@ -43,13 +43,13 @@ let execute_command cmd db =
       msg
 
   | Command.Get key -> (
-      match Storage.get storage key with
+      match Storage.get storage ~current_time key with
       | Some resp_value -> resp_value
       | None -> Resp.Null)
 
   | Command.Set { key; value; expiry_ms } ->
       let expires_at = match expiry_ms with
-        | Some ms -> Some (Unix.gettimeofday () +. (float ms /. 1000.0))
+        | Some ms -> Some (current_time +. (float ms /. 1000.0))
         | None -> None
       in
       Storage.set storage key value expires_at;
@@ -98,14 +98,14 @@ let should_propagate_command db cmd =
   | _ -> false
 
 (* Handle command with I/O and return optional response *)
-let handle_command db cmd ~original_resp ~ic ~oc ~address =
+let handle_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
   let open Lwt.Syntax in
   match cmd with
   | Command.Psync _ ->
       (* PSYNC: Send FULLRESYNC response, then RDB, then register replica *)
       (match db.role with
        | Master replica_manager ->
-           let response = execute_command cmd db in
+           let response = execute_command cmd db ~current_time in
            let* () = Lwt_io.write oc (Resp.serialize response) in
            let* () = Lwt_io.flush oc in
 
@@ -140,7 +140,7 @@ let handle_command db cmd ~original_resp ~ic ~oc ~address =
 
   | _ ->
       (* Normal command: execute and return response *)
-      let response = execute_command cmd db in
+      let response = execute_command cmd db ~current_time in
 
       (* Propagate to replicas if this is a write command on master *)
       let* () =

@@ -24,7 +24,7 @@ let test_replica_role () =
 (* Command Execution Tests *)
 let test_ping () =
   let db = Database.create Config.default in
-  let result = Database.execute_command Command.Ping db in
+  let result = Database.execute_command Command.Ping db ~current_time:1000.0 in
   check string "PING returns PONG"
     (Resp.serialize (Resp.SimpleString "PONG"))
     (Resp.serialize result)
@@ -32,7 +32,7 @@ let test_ping () =
 let test_echo () =
   let db = Database.create Config.default in
   let msg = Resp.BulkString "hello" in
-  let result = Database.execute_command (Command.Echo msg) db in
+  let result = Database.execute_command (Command.Echo msg) db ~current_time:1000.0 in
   check string "ECHO returns message"
     (Resp.serialize msg)
     (Resp.serialize result)
@@ -44,9 +44,9 @@ let test_set_get () =
     value = Resp.BulkString "myvalue";
     expiry_ms = None
   } in
-  let _ = Database.execute_command set_cmd db in
+  let _ = Database.execute_command set_cmd db ~current_time:1000.0 in
   let get_cmd = Command.Get "mykey" in
-  let result = Database.execute_command get_cmd db in
+  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
   check string "GET returns SET value"
     (Resp.serialize (Resp.BulkString "myvalue"))
     (Resp.serialize result)
@@ -54,7 +54,7 @@ let test_set_get () =
 let test_get_nonexistent () =
   let db = Database.create Config.default in
   let get_cmd = Command.Get "nonexistent" in
-  let result = Database.execute_command get_cmd db in
+  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
   check string "GET nonexistent returns Null"
     (Resp.serialize Resp.Null)
     (Resp.serialize result)
@@ -62,7 +62,7 @@ let test_get_nonexistent () =
 (* INFO Command Tests *)
 let test_info_master () =
   let db = Database.create Config.default in
-  let result = Database.execute_command Command.InfoReplication db in
+  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:master"
@@ -72,7 +72,7 @@ let test_info_master () =
 let test_info_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  let result = Database.execute_command Command.InfoReplication db in
+  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:slave"
@@ -83,7 +83,7 @@ let test_info_replica () =
 let test_replconf_ok () =
   let db = Database.create Config.default in
   let cmd = Command.Replconf (Command.ReplconfListeningPort 6379) in
-  let result = Database.execute_command cmd db in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
   check string "REPLCONF returns OK"
     (Resp.serialize (Resp.SimpleString "OK"))
     (Resp.serialize result)
@@ -92,7 +92,7 @@ let test_replconf_getack_on_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [
       Resp.BulkString "REPLCONF";
@@ -108,7 +108,7 @@ let test_increment_offset () =
   let db = Database.create config in
   Database.increment_offset db 100;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset incremented" "100" offset
@@ -120,7 +120,7 @@ let test_increment_offset_multiple_times () =
   Database.increment_offset db 50;
   Database.increment_offset db 75;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset accumulated" "125" offset
@@ -163,7 +163,7 @@ let test_should_not_propagate_ping () =
 let test_psync_response () =
   let db = Database.create Config.default in
   let cmd = Command.Psync { replication_id = "?"; offset = -1 } in
-  let result = Database.execute_command cmd db in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.SimpleString s ->
       check bool "PSYNC returns FULLRESYNC"

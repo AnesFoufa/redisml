@@ -32,3 +32,14 @@
  (alias runtest)
  (deps resp_test.exe)
  (action (run %{exe:resp_test.exe})))
+
+(executable
+ (name command_test)
+ (libraries codecrafters_redis alcotest)
+ (modules command_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps command_test.exe)
+ (action (run %{exe:command_test.exe})))

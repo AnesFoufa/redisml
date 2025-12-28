@@ -9,8 +9,8 @@ type t = {
   data : (string, item) Hashtbl.t;
 }
 
-let create () = {
-  data = Hashtbl.create Constants.initial_storage_capacity;
+let create ?(capacity=Constants.initial_storage_capacity) () = {
+  data = Hashtbl.create capacity;
 }
 
 let set storage key value expires_at =
@@ -37,8 +37,8 @@ let delete storage key =
   Hashtbl.remove storage.data key
 
 let keys storage =
-  (* Filter out expired keys *)
-  Hashtbl.to_seq storage.data
-  |> Seq.filter (fun (_key, item) -> not (is_expired item))
-  |> Seq.map fst
-  |> List.of_seq
+  (* Filter out expired keys - use fold to avoid intermediate allocations *)
+  Hashtbl.fold (fun key item acc ->
+    if is_expired item then acc
+    else key :: acc
+  ) storage.data []

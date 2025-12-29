@@ -207,6 +207,30 @@ let test_config_get_dbfilename_no_value () =
     (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString ""]))
     (Resp.serialize result)
 
+(* KEYS Tests *)
+let test_keys_empty () =
+  let db = Database.create Config.default in
+  let cmd = Command.Keys "*" in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  check string "KEYS on empty database"
+    (Resp.serialize (Resp.Array []))
+    (Resp.serialize result)
+
+let test_keys_with_data () =
+  let db = Database.create Config.default in
+  let _ = Database.execute_command
+    (Command.Set { key = "foo"; value = Resp.BulkString "bar"; expiry_ms = None })
+    db ~current_time:1000.0 in
+  let _ = Database.execute_command
+    (Command.Set { key = "baz"; value = Resp.BulkString "qux"; expiry_ms = None })
+    db ~current_time:1000.0 in
+  let cmd = Command.Keys "*" in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  match result with
+  | Resp.Array keys ->
+      check int "KEYS returns 2 keys" 2 (List.length keys)
+  | _ -> fail "Expected array"
+
 (* Test Suite *)
 let () =
   run "Database" [
@@ -246,5 +270,9 @@ let () =
       test_case "CONFIG GET dir no value" `Quick test_config_get_dir_no_value;
       test_case "CONFIG GET dbfilename with value" `Quick test_config_get_dbfilename_with_value;
       test_case "CONFIG GET dbfilename no value" `Quick test_config_get_dbfilename_no_value;
+    ];
+    "keys", [
+      test_case "KEYS on empty database" `Quick test_keys_empty;
+      test_case "KEYS with data" `Quick test_keys_with_data;
     ];
   ]

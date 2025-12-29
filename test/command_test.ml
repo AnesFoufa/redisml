@@ -27,6 +27,8 @@ let command_testable = testable (fun ppf cmd ->
         "ConfigGet(dir)"
     | Command.ConfigGet Command.Dbfilename ->
         "ConfigGet(dbfilename)"
+    | Command.Keys pattern ->
+        "Keys(" ^ pattern ^ ")"
   in
   Format.fprintf ppf "%s" str
 ) (=)

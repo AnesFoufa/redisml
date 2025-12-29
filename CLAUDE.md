@@ -26,7 +26,7 @@ Example workflow:
 ```bash
 # 1. Identify next failing stage
 git checkout master
-git push origin master  # CodeCrafters runs tests automatically
+codecrafters submit  # Runs tests and shows next failing stage
 
 # 2. Develop feature with tests
 git checkout with-tests
@@ -35,10 +35,10 @@ git commit -m "Add tests for feature X"
 # Implement and commit feature
 git commit -m "Implement feature X"
 
-# 3. Cherry-pick feature to master
+# 3. Cherry-pick feature to master and verify
 git checkout master
 git cherry-pick <feature-commit-hash>
-git push origin master  # Verify stage passes
+codecrafters submit  # Verify stage passes
 ```
 
 ## Build and Development Commands

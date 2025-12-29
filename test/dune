@@ -43,3 +43,14 @@
  (alias runtest)
  (deps command_test.exe)
  (action (run %{exe:command_test.exe})))
+
+(executable
+ (name rdb_test)
+ (libraries codecrafters_redis alcotest)
+ (modules rdb_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps rdb_test.exe)
+ (action (run %{exe:rdb_test.exe})))

@@ -41,6 +41,7 @@ type t =
   | Psync of psync_params
   | Wait of wait_params
   | ConfigGet of config_param
+  | Keys of string
 
 (* Validation functions *)
 let validate_set_params params =
@@ -144,6 +145,10 @@ let parse = function
        | "dir" -> Some (ConfigGet Dir)
        | "dbfilename" -> Some (ConfigGet Dbfilename)
        | _ -> None) (* Unknown parameter *)
+
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString pattern ]
+    when String.lowercase_ascii cmd = "keys" ->
+      Some (Keys pattern)
 
   | _ -> None
 

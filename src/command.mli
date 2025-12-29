@@ -35,6 +35,7 @@ type t =
   | Psync of psync_params
   | Wait of wait_params
   | ConfigGet of config_param
+  | Keys of string
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option

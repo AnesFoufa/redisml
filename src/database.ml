@@ -19,8 +19,18 @@ let create config =
     else
       Master (Replica_manager.create ())
   in
+  let storage = Storage.create () in
+
+  (* Load RDB file if configured *)
+  (match config.dir, config.dbfilename with
+   | Some dir, Some dbfilename ->
+       let filepath = Filename.concat dir dbfilename in
+       let pairs = Rdb.parse_file filepath in
+       List.iter (fun (key, value) -> Storage.set storage key value None) pairs
+   | _ -> ());
+
   {
-    storage = Storage.create ();
+    storage;
     config;
     role;
   }
@@ -97,6 +107,11 @@ let execute_command cmd db ~current_time =
         | Command.Dbfilename -> "dbfilename", Option.value ~default:"" db.config.dbfilename
       in
       Resp.Array [Resp.BulkString param_name; Resp.BulkString param_value]
+
+  | Command.Keys _pattern ->
+      (* For now, only support "*" pattern (return all keys) *)
+      let keys = Storage.keys db.storage ~current_time in
+      Resp.Array (List.map (fun k -> Resp.BulkString k) keys)
 
 (* Determine if command should be propagated *)
 let should_propagate_command db cmd =

@@ -10,23 +10,35 @@ This is an OCaml implementation of a Redis clone built for the CodeCrafters chal
 
 **Two-Branch Strategy**: Features are developed in `with-tests` branch, then cherry-picked to `master`.
 
-1. **Develop in `with-tests` branch**: All new features start here
-2. **Separate commits**: Tests and feature code must be in different commits
-3. **Merge both in `with-tests`**: Both test and feature commits stay in the test branch
-4. **Cherry-pick to `master`**: Only the feature commit gets cherry-picked to master branch
+### Feature Development Cycle
+
+1. **Run CodeCrafters tests on `master`**: Identify the next failing test/stage
+2. **Switch to `with-tests` branch**: All new features start here
+3. **Write tests first**: Commit unit tests for the feature
+4. **Implement feature**: Commit the implementation separately
+5. **Merge both in `with-tests`**: Both test and feature commits stay in the test branch
+6. **Cherry-pick to `master`**: Only the feature commit gets cherry-picked to master branch
+7. **Verify with CodeCrafters**: Run tests again to confirm the stage passes
 
 This keeps `master` clean for CodeCrafters submission while maintaining comprehensive tests in `with-tests`.
 
 Example workflow:
 ```bash
+# 1. Identify next failing stage
+git checkout master
+git push origin master  # CodeCrafters runs tests automatically
+
+# 2. Develop feature with tests
 git checkout with-tests
-# Make changes and commit tests
+# Write and commit tests
 git commit -m "Add tests for feature X"
-# Make changes and commit feature
+# Implement and commit feature
 git commit -m "Implement feature X"
-# Cherry-pick only the feature commit to master
+
+# 3. Cherry-pick feature to master
 git checkout master
 git cherry-pick <feature-commit-hash>
+git push origin master  # Verify stage passes
 ```
 
 ## Build and Development Commands

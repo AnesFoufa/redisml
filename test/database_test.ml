@@ -170,6 +170,43 @@ let test_psync_response () =
         true (contains_substring s "FULLRESYNC")
   | _ -> fail "Expected SimpleString"
 
+(* CONFIG Tests *)
+let test_config_get_dir_with_value () =
+  let config = { Config.default with dir = Some "/tmp/redis" } in
+  let db = Database.create config in
+  let cmd = Command.ConfigGet Command.Dir in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  check string "CONFIG GET dir returns array with value"
+    (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString "/tmp/redis"]))
+    (Resp.serialize result)
+
+let test_config_get_dir_no_value () =
+  let config = Config.default in
+  let db = Database.create config in
+  let cmd = Command.ConfigGet Command.Dir in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  check string "CONFIG GET dir with no value returns array with empty string"
+    (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString ""]))
+    (Resp.serialize result)
+
+let test_config_get_dbfilename_with_value () =
+  let config = { Config.default with dbfilename = Some "dump.rdb" } in
+  let db = Database.create config in
+  let cmd = Command.ConfigGet Command.Dbfilename in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  check string "CONFIG GET dbfilename returns array with value"
+    (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString "dump.rdb"]))
+    (Resp.serialize result)
+
+let test_config_get_dbfilename_no_value () =
+  let config = Config.default in
+  let db = Database.create config in
+  let cmd = Command.ConfigGet Command.Dbfilename in
+  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  check string "CONFIG GET dbfilename with no value returns array with empty string"
+    (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString ""]))
+    (Resp.serialize result)
+
 (* Test Suite *)
 let () =
   run "Database" [
@@ -203,5 +240,11 @@ let () =
     ];
     "psync", [
       test_case "PSYNC response" `Quick test_psync_response;
+    ];
+    "config", [
+      test_case "CONFIG GET dir with value" `Quick test_config_get_dir_with_value;
+      test_case "CONFIG GET dir no value" `Quick test_config_get_dir_no_value;
+      test_case "CONFIG GET dbfilename with value" `Quick test_config_get_dbfilename_with_value;
+      test_case "CONFIG GET dbfilename no value" `Quick test_config_get_dbfilename_no_value;
     ];
   ]

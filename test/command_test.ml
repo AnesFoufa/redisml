@@ -23,6 +23,10 @@ let command_testable = testable (fun ppf cmd ->
         Printf.sprintf "Psync(id=%s, offset=%d)" replication_id offset
     | Command.Wait { num_replicas; timeout_ms } ->
         Printf.sprintf "Wait(replicas=%d, timeout=%d)" num_replicas timeout_ms
+    | Command.ConfigGet Command.Dir ->
+        "ConfigGet(dir)"
+    | Command.ConfigGet Command.Dbfilename ->
+        "ConfigGet(dbfilename)"
   in
   Format.fprintf ppf "%s" str
 ) (=)
@@ -461,6 +465,57 @@ let test_parse_simple_string_cmd () =
     None
     (Command.parse resp)
 
+(* CONFIG Tests *)
+let test_parse_config_get_dir () =
+  let resp = Resp.Array [
+    Resp.BulkString "CONFIG";
+    Resp.BulkString "GET";
+    Resp.BulkString "dir"
+  ] in
+  check option_command_testable "CONFIG GET dir"
+    (Some (Command.ConfigGet Command.Dir))
+    (Command.parse resp)
+
+let test_parse_config_get_dbfilename () =
+  let resp = Resp.Array [
+    Resp.BulkString "CONFIG";
+    Resp.BulkString "GET";
+    Resp.BulkString "dbfilename"
+  ] in
+  check option_command_testable "CONFIG GET dbfilename"
+    (Some (Command.ConfigGet Command.Dbfilename))
+    (Command.parse resp)
+
+let test_parse_config_get_mixed_case () =
+  let resp = Resp.Array [
+    Resp.BulkString "config";
+    Resp.BulkString "get";
+    Resp.BulkString "DIR"
+  ] in
+  check option_command_testable "CONFIG GET (mixed case)"
+    (Some (Command.ConfigGet Command.Dir))
+    (Command.parse resp)
+
+let test_parse_config_missing_args () =
+  let resp = Resp.Array [
+    Resp.BulkString "CONFIG";
+    Resp.BulkString "GET"
+  ] in
+  check option_command_testable "CONFIG GET without parameter (invalid)"
+    None
+    (Command.parse resp)
+
+let test_parse_config_unknown_subcommand () =
+  let resp = Resp.Array [
+    Resp.BulkString "CONFIG";
+    Resp.BulkString "SET";
+    Resp.BulkString "dir";
+    Resp.BulkString "/tmp"
+  ] in
+  check option_command_testable "CONFIG SET (unknown subcommand)"
+    None
+    (Command.parse resp)
+
 (* Test Suite *)
 let () =
   run "Command" [
@@ -520,6 +575,13 @@ let () =
       test_case "WAIT negative replicas (invalid)" `Quick test_parse_wait_negative_replicas;
       test_case "WAIT negative timeout (invalid)" `Quick test_parse_wait_negative_timeout;
       test_case "WAIT invalid numbers (invalid)" `Quick test_parse_wait_invalid_numbers;
+    ];
+    "config", [
+      test_case "CONFIG GET dir" `Quick test_parse_config_get_dir;
+      test_case "CONFIG GET dbfilename" `Quick test_parse_config_get_dbfilename;
+      test_case "CONFIG GET (mixed case)" `Quick test_parse_config_get_mixed_case;
+      test_case "CONFIG GET missing args (invalid)" `Quick test_parse_config_missing_args;
+      test_case "CONFIG unknown subcommand (invalid)" `Quick test_parse_config_unknown_subcommand;
     ];
     "edge_cases", [
       test_case "Unknown command" `Quick test_parse_unknown_command;

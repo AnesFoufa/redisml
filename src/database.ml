@@ -26,7 +26,9 @@ let create config =
    | Some dir, Some dbfilename ->
        let filepath = Filename.concat dir dbfilename in
        let pairs = Rdb.parse_file filepath in
-       List.iter (fun (key, value) -> Storage.set storage key value None) pairs
+       List.iter (fun (key, _value) ->
+         Storage.set storage key _value None
+       ) pairs
    | _ -> ());
 
   {

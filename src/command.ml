@@ -27,6 +27,10 @@ type wait_params = {
   timeout_ms: int;
 }
 
+type config_param =
+  | Dir
+  | Dbfilename
+
 type t =
   | Ping
   | Echo of Resp.t
@@ -36,6 +40,7 @@ type t =
   | Replconf of replconf_command
   | Psync of psync_params
   | Wait of wait_params
+  | ConfigGet of config_param
 
 (* Validation functions *)
 let validate_set_params params =
@@ -132,6 +137,13 @@ let parse = function
             | Ok () -> Some (Wait params)
             | Error _ -> None) (* Reject invalid timeout or num_replicas *)
        | _ -> None)
+
+  | Resp.Array [ Resp.BulkString cmd; Resp.BulkString subcommand; Resp.BulkString param ]
+    when String.lowercase_ascii cmd = "config" && String.lowercase_ascii subcommand = "get" ->
+      (match String.lowercase_ascii param with
+       | "dir" -> Some (ConfigGet Dir)
+       | "dbfilename" -> Some (ConfigGet Dbfilename)
+       | _ -> None) (* Unknown parameter *)
 
   | _ -> None
 

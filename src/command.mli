@@ -21,6 +21,10 @@ type wait_params = {
   timeout_ms: int;
 }
 
+type config_param =
+  | Dir
+  | Dbfilename
+
 type t =
   | Ping
   | Echo of Resp.t
@@ -30,6 +34,7 @@ type t =
   | Replconf of replconf_command
   | Psync of psync_params
   | Wait of wait_params
+  | ConfigGet of config_param
 
 (* Parse a RESP value into a command *)
 val parse : Resp.t -> t option

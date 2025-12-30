@@ -16,51 +16,29 @@ let handle_connection ~client_addr ~channels:(ic, oc)
     | Unix.ADDR_UNIX s -> s
   in
 
-  (* Buffer for incomplete messages - use Buffer module instead of string concatenation *)
-  let buffer = Buffer.create Constants.protocol_read_buffer in
+  (* Buffer reader for incomplete messages with DOS protection *)
+  let reader = Buffer_reader.create ~max_size:(Some Constants.protocol_max_buffer) () in
 
   let rec loop () =
     Lwt.catch
       (fun () ->
-        let* data = Lwt_io.read ~count:Constants.protocol_read_buffer ic in
-        if String.length data = 0 then
-          (* Connection closed *)
-          Lwt.return_unit
-        else (
-          (* Check buffer size before adding data (DOS protection) *)
-          let current_size = Buffer.length buffer in
-          let new_size = current_size + String.length data in
-          if new_size > Constants.protocol_max_buffer then (
-            (* Buffer too large - disconnect client *)
-            let* () = Lwt_io.eprintlf "Client %s exceeded buffer limit (%d bytes), disconnecting"
-              addr_str new_size in
+        let* result = Buffer_reader.read_from_channel reader ic ~count:Constants.protocol_read_buffer in
+        match result with
+        | `Eof ->
+            (* Connection closed *)
             Lwt.return_unit
-          ) else (
-            (* Add to buffer *)
-            Buffer.add_string buffer data;
-
-            (* Try to parse and process commands from buffer *)
-            let rec process_buffer () =
-              let contents = Buffer.contents buffer in
-              match Resp.parse contents with
-              | Some (cmd, rest) ->
-                  (* Successfully parsed a command *)
-                  Buffer.clear buffer;
-                  Buffer.add_string buffer rest;
-
-                  (* Execute command - handler sends response *)
-                  let* () = command_handler cmd ic oc addr_str in
-
-                  process_buffer ()
-              | None ->
-                  (* Incomplete command, wait for more data *)
-                  Lwt.return_unit
+        | `BufferOverflow ->
+            (* Buffer too large - disconnect client *)
+            let* () = Lwt_io.eprintlf "Client %s exceeded buffer limit, disconnecting" addr_str in
+            Lwt.return_unit
+        | `Ok ->
+            (* Process all complete commands in buffer *)
+            let* () = Buffer_reader.process_all_buffered reader
+              ~parser:Resp.parse
+              ~f:(fun cmd -> command_handler cmd ic oc addr_str)
             in
-
-            let* () = process_buffer () in
             loop ()
-          )
-        ))
+        )
       (fun exn ->
         match exn with
         | Replication_takeover ->

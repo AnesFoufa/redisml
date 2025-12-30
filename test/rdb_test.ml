@@ -4,8 +4,11 @@ open Alcotest
 open Codecrafters_redis
 
 let test_parse_nonexistent_file () =
-  let pairs = Rdb.parse_file "/nonexistent/file.rdb" in
-  check int "nonexistent file returns empty list" 0 (List.length pairs)
+  let result = Rdb.parse_file "/nonexistent/file.rdb" in
+  match result with
+  | Error (`FileNotFound _) -> ()
+  | Error err -> failwith (Printf.sprintf "Expected FileNotFound, got: %s" (Rdb.error_to_string err))
+  | Ok _ -> fail "Expected error for nonexistent file"
 
 let test_parse_empty_rdb () =
   let temp_file = Filename.temp_file "test" ".rdb" in
@@ -14,9 +17,11 @@ let test_parse_empty_rdb () =
   output_byte oc 0xFF;
   close_out oc;
 
-  let pairs = Rdb.parse_file temp_file in
+  let result = Rdb.parse_file temp_file in
   Sys.remove temp_file;
-  check int "empty RDB returns empty list" 0 (List.length pairs)
+  match result with
+  | Ok pairs -> check int "empty RDB returns empty list" 0 (List.length pairs)
+  | Error err -> failwith (Printf.sprintf "Parse failed: %s" (Rdb.error_to_string err))
 
 let test_parse_single_key () =
   let temp_file = Filename.temp_file "test" ".rdb" in
@@ -32,15 +37,18 @@ let test_parse_single_key () =
   output_byte oc 0xFF;
   close_out oc;
 
-  let pairs = Rdb.parse_file temp_file in
+  let result = Rdb.parse_file temp_file in
   Sys.remove temp_file;
-  check int "RDB with one key" 1 (List.length pairs);
-  match pairs with
-  | [(k, Resp.BulkString v, expiry)] ->
-      check string "key name" "key" k;
-      check string "value" "value" v;
-      check (option reject) "no expiry" None expiry
-  | _ -> fail "Expected one key-value pair"
+  match result with
+  | Ok pairs ->
+      check int "RDB with one key" 1 (List.length pairs);
+      (match pairs with
+       | [(k, Resp.BulkString v, expiry)] ->
+           check string "key name" "key" k;
+           check string "value" "value" v;
+           check (option reject) "no expiry" None expiry
+       | _ -> fail "Expected one key-value pair")
+  | Error err -> failwith (Printf.sprintf "Parse failed: %s" (Rdb.error_to_string err))
 
 let test_parse_with_metadata () =
   let temp_file = Filename.temp_file "test" ".rdb" in
@@ -69,15 +77,18 @@ let test_parse_with_metadata () =
   output_byte oc 0xFF;
   close_out oc;
 
-  let pairs = Rdb.parse_file temp_file in
+  let result = Rdb.parse_file temp_file in
   Sys.remove temp_file;
-  check int "RDB with metadata" 1 (List.length pairs);
-  match pairs with
-  | [(k, Resp.BulkString v, expiry)] ->
-      check string "key name" "hello" k;
-      check string "value" "world" v;
-      check (option reject) "no expiry" None expiry
-  | _ -> fail "Expected one key-value pair"
+  match result with
+  | Ok pairs ->
+      check int "RDB with metadata" 1 (List.length pairs);
+      (match pairs with
+       | [(k, Resp.BulkString v, expiry)] ->
+           check string "key name" "hello" k;
+           check string "value" "world" v;
+           check (option reject) "no expiry" None expiry
+       | _ -> fail "Expected one key-value pair")
+  | Error err -> failwith (Printf.sprintf "Parse failed: %s" (Rdb.error_to_string err))
 
 let write_int32_le oc n =
   output_byte oc (n land 0xFF);
@@ -112,15 +123,18 @@ let test_parse_with_expiretime () =
   output_byte oc 0xFF;
   close_out oc;
 
-  let pairs = Rdb.parse_file temp_file in
+  let result = Rdb.parse_file temp_file in
   Sys.remove temp_file;
-  check int "RDB with expiretime" 1 (List.length pairs);
-  match pairs with
-  | [(k, Resp.BulkString v, Some expiry)] ->
-      check string "key name" "key" k;
-      check string "value" "value" v;
-      check (float 0.1) "expiry timestamp" 1700000000.0 expiry
-  | _ -> fail "Expected one key-value pair with expiry"
+  match result with
+  | Ok pairs ->
+      check int "RDB with expiretime" 1 (List.length pairs);
+      (match pairs with
+       | [(k, Resp.BulkString v, Some expiry)] ->
+           check string "key name" "key" k;
+           check string "value" "value" v;
+           check (float 0.1) "expiry timestamp" 1700000000.0 expiry
+       | _ -> fail "Expected one key-value pair with expiry")
+  | Error err -> failwith (Printf.sprintf "Parse failed: %s" (Rdb.error_to_string err))
 
 let test_parse_with_expiretimems () =
   let temp_file = Filename.temp_file "test" ".rdb" in
@@ -139,15 +153,18 @@ let test_parse_with_expiretimems () =
   output_byte oc 0xFF;
   close_out oc;
 
-  let pairs = Rdb.parse_file temp_file in
+  let result = Rdb.parse_file temp_file in
   Sys.remove temp_file;
-  check int "RDB with expiretimems" 1 (List.length pairs);
-  match pairs with
-  | [(k, Resp.BulkString v, Some expiry)] ->
-      check string "key name" "key" k;
-      check string "value" "value" v;
-      check (float 0.1) "expiry timestamp" 1700000000.5 expiry
-  | _ -> fail "Expected one key-value pair with expiry"
+  match result with
+  | Ok pairs ->
+      check int "RDB with expiretimems" 1 (List.length pairs);
+      (match pairs with
+       | [(k, Resp.BulkString v, Some expiry)] ->
+           check string "key name" "key" k;
+           check string "value" "value" v;
+           check (float 0.1) "expiry timestamp" 1700000000.5 expiry
+       | _ -> fail "Expected one key-value pair with expiry")
+  | Error err -> failwith (Printf.sprintf "Parse failed: %s" (Rdb.error_to_string err))
 
 let () =
   run "RDB" [

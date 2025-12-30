@@ -37,5 +37,15 @@ type t =
   | ConfigGet of config_param
   | Keys of string
 
+(* Command parsing/validation errors *)
+type error = [
+  | `InvalidExpiry of int
+  | `InvalidPort of int
+  | `InvalidTimeout of int
+  | `InvalidNumReplicas of int
+  | `UnknownCommand
+  | `MalformedCommand of string
+]
+
 (* Parse a RESP value into a command *)
-val parse : Resp.t -> t option
+val parse : Resp.t -> (t, [> error]) result

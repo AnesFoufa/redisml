@@ -3,7 +3,7 @@
 open Alcotest
 open Codecrafters_redis
 
-(* Custom testable for Command.t option *)
+(* Custom testable for Command.t *)
 let command_testable = testable (fun ppf cmd ->
   let str = match cmd with
     | Command.Ping -> "Ping"
@@ -33,82 +33,95 @@ let command_testable = testable (fun ppf cmd ->
   Format.fprintf ppf "%s" str
 ) (=)
 
-let option_command_testable = option command_testable
+(* Custom testable for Command.error *)
+let error_testable = testable (fun ppf err ->
+  let str = match err with
+    | `InvalidExpiry e -> "InvalidExpiry(" ^ string_of_int e ^ ")"
+    | `InvalidPort p -> "InvalidPort(" ^ string_of_int p ^ ")"
+    | `InvalidTimeout t -> "InvalidTimeout(" ^ string_of_int t ^ ")"
+    | `InvalidNumReplicas n -> "InvalidNumReplicas(" ^ string_of_int n ^ ")"
+    | `UnknownCommand -> "UnknownCommand"
+    | `MalformedCommand msg -> "MalformedCommand(" ^ msg ^ ")"
+  in
+  Format.fprintf ppf "%s" str
+) (=)
+
+let result_command_testable = result command_testable error_testable
 
 (* PING Tests *)
 let test_parse_ping () =
   let resp = Resp.Array [Resp.BulkString "PING"] in
-  check option_command_testable "PING command"
-    (Some Command.Ping)
+  check result_command_testable "PING command"
+    (Ok Command.Ping)
     (Command.parse resp)
 
 let test_parse_ping_lowercase () =
   let resp = Resp.Array [Resp.BulkString "ping"] in
-  check option_command_testable "PING command (lowercase)"
-    (Some Command.Ping)
+  check result_command_testable "PING command (lowercase)"
+    (Ok Command.Ping)
     (Command.parse resp)
 
 let test_parse_ping_mixed_case () =
   let resp = Resp.Array [Resp.BulkString "PiNg"] in
-  check option_command_testable "PING command (mixed case)"
-    (Some Command.Ping)
+  check result_command_testable "PING command (mixed case)"
+    (Ok Command.Ping)
     (Command.parse resp)
 
 let test_parse_ping_with_args () =
   let resp = Resp.Array [Resp.BulkString "PING"; Resp.BulkString "arg"] in
-  check option_command_testable "PING with arguments (invalid)"
-    None
+  check result_command_testable "PING with arguments (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* ECHO Tests *)
 let test_parse_echo () =
   let resp = Resp.Array [Resp.BulkString "ECHO"; Resp.BulkString "hello"] in
-  check option_command_testable "ECHO command"
-    (Some (Command.Echo (Resp.BulkString "hello")))
+  check result_command_testable "ECHO command"
+    (Ok (Command.Echo (Resp.BulkString "hello")))
     (Command.parse resp)
 
 let test_parse_echo_integer () =
   let resp = Resp.Array [Resp.BulkString "ECHO"; Resp.Integer 42] in
-  check option_command_testable "ECHO with integer"
-    (Some (Command.Echo (Resp.Integer 42)))
+  check result_command_testable "ECHO with integer"
+    (Ok (Command.Echo (Resp.Integer 42)))
     (Command.parse resp)
 
 let test_parse_echo_array () =
   let msg = Resp.Array [Resp.BulkString "foo"; Resp.BulkString "bar"] in
   let resp = Resp.Array [Resp.BulkString "ECHO"; msg] in
-  check option_command_testable "ECHO with array"
-    (Some (Command.Echo msg))
+  check result_command_testable "ECHO with array"
+    (Ok (Command.Echo msg))
     (Command.parse resp)
 
 let test_parse_echo_no_arg () =
   let resp = Resp.Array [Resp.BulkString "ECHO"] in
-  check option_command_testable "ECHO without argument (invalid)"
-    None
+  check result_command_testable "ECHO without argument (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* GET Tests *)
 let test_parse_get () =
   let resp = Resp.Array [Resp.BulkString "GET"; Resp.BulkString "mykey"] in
-  check option_command_testable "GET command"
-    (Some (Command.Get "mykey"))
+  check result_command_testable "GET command"
+    (Ok (Command.Get "mykey"))
     (Command.parse resp)
 
 let test_parse_get_empty_key () =
   let resp = Resp.Array [Resp.BulkString "GET"; Resp.BulkString ""] in
-  check option_command_testable "GET with empty key"
-    (Some (Command.Get ""))
+  check result_command_testable "GET with empty key"
+    (Ok (Command.Get ""))
     (Command.parse resp)
 
 let test_parse_get_no_key () =
   let resp = Resp.Array [Resp.BulkString "GET"] in
-  check option_command_testable "GET without key (invalid)"
-    None
+  check result_command_testable "GET without key (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 let test_parse_get_wrong_type () =
   let resp = Resp.Array [Resp.BulkString "GET"; Resp.Integer 42] in
-  check option_command_testable "GET with non-string key (invalid)"
-    None
+  check result_command_testable "GET with non-string key (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* SET Tests *)
@@ -118,8 +131,8 @@ let test_parse_set_basic () =
     Resp.BulkString "key";
     Resp.BulkString "value"
   ] in
-  check option_command_testable "SET command (basic)"
-    (Some (Command.Set {
+  check result_command_testable "SET command (basic)"
+    (Ok (Command.Set {
       key = "key";
       value = Resp.BulkString "value";
       expiry_ms = None
@@ -134,8 +147,8 @@ let test_parse_set_with_px () =
     Resp.BulkString "px";
     Resp.BulkString "1000"
   ] in
-  check option_command_testable "SET with PX (milliseconds)"
-    (Some (Command.Set {
+  check result_command_testable "SET with PX (milliseconds)"
+    (Ok (Command.Set {
       key = "key";
       value = Resp.BulkString "value";
       expiry_ms = Some 1000
@@ -150,8 +163,8 @@ let test_parse_set_with_ex () =
     Resp.BulkString "ex";
     Resp.BulkString "10"
   ] in
-  check option_command_testable "SET with EX (seconds converted to ms)"
-    (Some (Command.Set {
+  check result_command_testable "SET with EX (seconds converted to ms)"
+    (Ok (Command.Set {
       key = "key";
       value = Resp.BulkString "value";
       expiry_ms = Some 10000
@@ -166,8 +179,8 @@ let test_parse_set_with_px_uppercase () =
     Resp.BulkString "PX";
     Resp.BulkString "2000"
   ] in
-  check option_command_testable "SET with PX uppercase"
-    (Some (Command.Set {
+  check result_command_testable "SET with PX uppercase"
+    (Ok (Command.Set {
       key = "key";
       value = Resp.BulkString "value";
       expiry_ms = Some 2000
@@ -182,8 +195,8 @@ let test_parse_set_negative_expiry () =
     Resp.BulkString "px";
     Resp.BulkString "-100"
   ] in
-  check option_command_testable "SET with negative expiry (invalid)"
-    None
+  check result_command_testable "SET with negative expiry (invalid)"
+    (Error (`InvalidExpiry (-100)))
     (Command.parse resp)
 
 let test_parse_set_non_bulk_value () =
@@ -192,8 +205,8 @@ let test_parse_set_non_bulk_value () =
     Resp.BulkString "key";
     Resp.Integer 42
   ] in
-  check option_command_testable "SET with integer value"
-    (Some (Command.Set {
+  check result_command_testable "SET with integer value"
+    (Ok (Command.Set {
       key = "key";
       value = Resp.Integer 42;
       expiry_ms = None
@@ -205,8 +218,8 @@ let test_parse_set_missing_value () =
     Resp.BulkString "SET";
     Resp.BulkString "key"
   ] in
-  check option_command_testable "SET without value (invalid)"
-    None
+  check result_command_testable "SET without value (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* INFO Tests *)
@@ -215,8 +228,8 @@ let test_parse_info_replication () =
     Resp.BulkString "INFO";
     Resp.BulkString "replication"
   ] in
-  check option_command_testable "INFO replication"
-    (Some Command.InfoReplication)
+  check result_command_testable "INFO replication"
+    (Ok Command.InfoReplication)
     (Command.parse resp)
 
 let test_parse_info_replication_uppercase () =
@@ -224,8 +237,8 @@ let test_parse_info_replication_uppercase () =
     Resp.BulkString "INFO";
     Resp.BulkString "REPLICATION"
   ] in
-  check option_command_testable "INFO REPLICATION uppercase"
-    (Some Command.InfoReplication)
+  check result_command_testable "INFO REPLICATION uppercase"
+    (Ok Command.InfoReplication)
     (Command.parse resp)
 
 let test_parse_info_other_section () =
@@ -233,14 +246,14 @@ let test_parse_info_other_section () =
     Resp.BulkString "INFO";
     Resp.BulkString "stats"
   ] in
-  check option_command_testable "INFO stats (no 'r', invalid)"
-    None
+  check result_command_testable "INFO stats (no 'r', invalid)"
+    (Error (`MalformedCommand "INFO requires 'replication' section"))
     (Command.parse resp)
 
 let test_parse_info_no_section () =
   let resp = Resp.Array [Resp.BulkString "INFO"] in
-  check option_command_testable "INFO without section (invalid)"
-    None
+  check result_command_testable "INFO without section (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* REPLCONF Tests *)
@@ -250,8 +263,8 @@ let test_parse_replconf_listening_port () =
     Resp.BulkString "listening-port";
     Resp.BulkString "6380"
   ] in
-  check option_command_testable "REPLCONF listening-port"
-    (Some (Command.Replconf (Command.ReplconfListeningPort 6380)))
+  check result_command_testable "REPLCONF listening-port"
+    (Ok (Command.Replconf (Command.ReplconfListeningPort 6380)))
     (Command.parse resp)
 
 let test_parse_replconf_port_mixed_case () =
@@ -260,8 +273,8 @@ let test_parse_replconf_port_mixed_case () =
     Resp.BulkString "LISTENING-PORT";
     Resp.BulkString "6380"
   ] in
-  check option_command_testable "REPLCONF LISTENING-PORT (mixed case)"
-    (Some (Command.Replconf (Command.ReplconfListeningPort 6380)))
+  check result_command_testable "REPLCONF LISTENING-PORT (mixed case)"
+    (Ok (Command.Replconf (Command.ReplconfListeningPort 6380)))
     (Command.parse resp)
 
 let test_parse_replconf_port_too_low () =
@@ -270,8 +283,8 @@ let test_parse_replconf_port_too_low () =
     Resp.BulkString "listening-port";
     Resp.BulkString "0"
   ] in
-  check option_command_testable "REPLCONF port 0 (invalid)"
-    None
+  check result_command_testable "REPLCONF port 0 (invalid)"
+    (Error (`InvalidPort 0))
     (Command.parse resp)
 
 let test_parse_replconf_port_too_high () =
@@ -280,8 +293,8 @@ let test_parse_replconf_port_too_high () =
     Resp.BulkString "listening-port";
     Resp.BulkString "65536"
   ] in
-  check option_command_testable "REPLCONF port 65536 (invalid)"
-    None
+  check result_command_testable "REPLCONF port 65536 (invalid)"
+    (Error (`InvalidPort 65536))
     (Command.parse resp)
 
 let test_parse_replconf_capa () =
@@ -290,8 +303,8 @@ let test_parse_replconf_capa () =
     Resp.BulkString "capa";
     Resp.BulkString "psync2"
   ] in
-  check option_command_testable "REPLCONF capa"
-    (Some (Command.Replconf (Command.ReplconfCapa "psync2")))
+  check result_command_testable "REPLCONF capa"
+    (Ok (Command.Replconf (Command.ReplconfCapa "psync2")))
     (Command.parse resp)
 
 let test_parse_replconf_getack () =
@@ -300,8 +313,8 @@ let test_parse_replconf_getack () =
     Resp.BulkString "getack";
     Resp.BulkString "*"
   ] in
-  check option_command_testable "REPLCONF GETACK"
-    (Some (Command.Replconf Command.ReplconfGetAck))
+  check result_command_testable "REPLCONF GETACK"
+    (Ok (Command.Replconf Command.ReplconfGetAck))
     (Command.parse resp)
 
 let test_parse_replconf_unknown () =
@@ -310,8 +323,8 @@ let test_parse_replconf_unknown () =
     Resp.BulkString "unknown";
     Resp.BulkString "value"
   ] in
-  check option_command_testable "REPLCONF unknown subcommand (invalid)"
-    None
+  check result_command_testable "REPLCONF unknown subcommand (invalid)"
+    (Error (`MalformedCommand "Unknown REPLCONF subcommand: unknown"))
     (Command.parse resp)
 
 let test_parse_replconf_missing_args () =
@@ -319,8 +332,8 @@ let test_parse_replconf_missing_args () =
     Resp.BulkString "REPLCONF";
     Resp.BulkString "listening-port"
   ] in
-  check option_command_testable "REPLCONF missing argument (invalid)"
-    None
+  check result_command_testable "REPLCONF missing argument (invalid)"
+    (Error (`MalformedCommand "REPLCONF requires exactly 2 arguments"))
     (Command.parse resp)
 
 (* PSYNC Tests *)
@@ -330,8 +343,8 @@ let test_parse_psync () =
     Resp.BulkString "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
     Resp.BulkString "0"
   ] in
-  check option_command_testable "PSYNC command"
-    (Some (Command.Psync {
+  check result_command_testable "PSYNC command"
+    (Ok (Command.Psync {
       replication_id = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
       offset = 0
     }))
@@ -343,8 +356,8 @@ let test_parse_psync_question_mark () =
     Resp.BulkString "?";
     Resp.BulkString "-1"
   ] in
-  check option_command_testable "PSYNC with ? and -1"
-    (Some (Command.Psync {
+  check result_command_testable "PSYNC with ? and -1"
+    (Ok (Command.Psync {
       replication_id = "?";
       offset = -1
     }))
@@ -356,8 +369,8 @@ let test_parse_psync_invalid_offset () =
     Resp.BulkString "someid";
     Resp.BulkString "notanumber"
   ] in
-  check option_command_testable "PSYNC with invalid offset (defaults to -1)"
-    (Some (Command.Psync {
+  check result_command_testable "PSYNC with invalid offset (defaults to -1)"
+    (Ok (Command.Psync {
       replication_id = "someid";
       offset = -1
     }))
@@ -368,8 +381,8 @@ let test_parse_psync_missing_args () =
     Resp.BulkString "PSYNC";
     Resp.BulkString "someid"
   ] in
-  check option_command_testable "PSYNC missing offset (invalid)"
-    None
+  check result_command_testable "PSYNC missing offset (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* WAIT Tests *)
@@ -379,8 +392,8 @@ let test_parse_wait () =
     Resp.BulkString "2";
     Resp.BulkString "1000"
   ] in
-  check option_command_testable "WAIT command"
-    (Some (Command.Wait {
+  check result_command_testable "WAIT command"
+    (Ok (Command.Wait {
       num_replicas = 2;
       timeout_ms = 1000
     }))
@@ -392,8 +405,8 @@ let test_parse_wait_zero_replicas () =
     Resp.BulkString "0";
     Resp.BulkString "1000"
   ] in
-  check option_command_testable "WAIT with 0 replicas"
-    (Some (Command.Wait {
+  check result_command_testable "WAIT with 0 replicas"
+    (Ok (Command.Wait {
       num_replicas = 0;
       timeout_ms = 1000
     }))
@@ -405,8 +418,8 @@ let test_parse_wait_zero_timeout () =
     Resp.BulkString "1";
     Resp.BulkString "0"
   ] in
-  check option_command_testable "WAIT with 0 timeout"
-    (Some (Command.Wait {
+  check result_command_testable "WAIT with 0 timeout"
+    (Ok (Command.Wait {
       num_replicas = 1;
       timeout_ms = 0
     }))
@@ -418,8 +431,8 @@ let test_parse_wait_negative_replicas () =
     Resp.BulkString "-1";
     Resp.BulkString "1000"
   ] in
-  check option_command_testable "WAIT with negative replicas (invalid)"
-    None
+  check result_command_testable "WAIT with negative replicas (invalid)"
+    (Error (`InvalidNumReplicas (-1)))
     (Command.parse resp)
 
 let test_parse_wait_negative_timeout () =
@@ -428,8 +441,8 @@ let test_parse_wait_negative_timeout () =
     Resp.BulkString "1";
     Resp.BulkString "-1000"
   ] in
-  check option_command_testable "WAIT with negative timeout (invalid)"
-    None
+  check result_command_testable "WAIT with negative timeout (invalid)"
+    (Error (`InvalidTimeout (-1000)))
     (Command.parse resp)
 
 let test_parse_wait_invalid_numbers () =
@@ -438,33 +451,33 @@ let test_parse_wait_invalid_numbers () =
     Resp.BulkString "abc";
     Resp.BulkString "1000"
   ] in
-  check option_command_testable "WAIT with invalid num_replicas (invalid)"
-    None
+  check result_command_testable "WAIT with invalid num_replicas (invalid)"
+    (Error (`MalformedCommand "WAIT requires two integer arguments"))
     (Command.parse resp)
 
 (* Edge Cases *)
 let test_parse_unknown_command () =
   let resp = Resp.Array [Resp.BulkString "UNKNOWN"] in
-  check option_command_testable "Unknown command"
-    None
+  check result_command_testable "Unknown command"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 let test_parse_empty_array () =
   let resp = Resp.Array [] in
-  check option_command_testable "Empty array"
-    None
+  check result_command_testable "Empty array"
+    (Error (`MalformedCommand "Expected RESP Array with command"))
     (Command.parse resp)
 
 let test_parse_not_array () =
   let resp = Resp.BulkString "PING" in
-  check option_command_testable "Not an array"
-    None
+  check result_command_testable "Not an array"
+    (Error (`MalformedCommand "Expected RESP Array with command"))
     (Command.parse resp)
 
 let test_parse_simple_string_cmd () =
   let resp = Resp.Array [Resp.SimpleString "PING"] in
-  check option_command_testable "SimpleString instead of BulkString"
-    None
+  check result_command_testable "SimpleString instead of BulkString"
+    (Error (`MalformedCommand "Expected RESP Array with command"))
     (Command.parse resp)
 
 (* CONFIG Tests *)
@@ -474,8 +487,8 @@ let test_parse_config_get_dir () =
     Resp.BulkString "GET";
     Resp.BulkString "dir"
   ] in
-  check option_command_testable "CONFIG GET dir"
-    (Some (Command.ConfigGet Command.Dir))
+  check result_command_testable "CONFIG GET dir"
+    (Ok (Command.ConfigGet Command.Dir))
     (Command.parse resp)
 
 let test_parse_config_get_dbfilename () =
@@ -484,8 +497,8 @@ let test_parse_config_get_dbfilename () =
     Resp.BulkString "GET";
     Resp.BulkString "dbfilename"
   ] in
-  check option_command_testable "CONFIG GET dbfilename"
-    (Some (Command.ConfigGet Command.Dbfilename))
+  check result_command_testable "CONFIG GET dbfilename"
+    (Ok (Command.ConfigGet Command.Dbfilename))
     (Command.parse resp)
 
 let test_parse_config_get_mixed_case () =
@@ -494,8 +507,8 @@ let test_parse_config_get_mixed_case () =
     Resp.BulkString "get";
     Resp.BulkString "DIR"
   ] in
-  check option_command_testable "CONFIG GET (mixed case)"
-    (Some (Command.ConfigGet Command.Dir))
+  check result_command_testable "CONFIG GET (mixed case)"
+    (Ok (Command.ConfigGet Command.Dir))
     (Command.parse resp)
 
 let test_parse_config_missing_args () =
@@ -503,8 +516,8 @@ let test_parse_config_missing_args () =
     Resp.BulkString "CONFIG";
     Resp.BulkString "GET"
   ] in
-  check option_command_testable "CONFIG GET without parameter (invalid)"
-    None
+  check result_command_testable "CONFIG GET without parameter (invalid)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 let test_parse_config_unknown_subcommand () =
@@ -514,8 +527,8 @@ let test_parse_config_unknown_subcommand () =
     Resp.BulkString "dir";
     Resp.BulkString "/tmp"
   ] in
-  check option_command_testable "CONFIG SET (unknown subcommand)"
-    None
+  check result_command_testable "CONFIG SET (unknown subcommand)"
+    (Error `UnknownCommand)
     (Command.parse resp)
 
 (* Test Suite *)

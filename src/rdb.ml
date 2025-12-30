@@ -1,5 +1,25 @@
 (* RDB file parser *)
 
+(* RDB parsing errors *)
+type error = [
+  | `FileNotFound of string
+  | `InvalidHeader
+  | `UnexpectedEOF of string
+  | `CorruptedData of string
+  | `UnsupportedEncoding of int
+  | `UnsupportedValueType of int
+  | `IoError of string
+]
+
+let error_to_string = function
+  | `FileNotFound path -> Printf.sprintf "RDB file not found: %s" path
+  | `InvalidHeader -> "Invalid RDB file header (missing 'REDIS' magic)"
+  | `UnexpectedEOF context -> Printf.sprintf "Unexpected end of file while reading %s" context
+  | `CorruptedData context -> Printf.sprintf "Corrupted data at %s" context
+  | `UnsupportedEncoding enc -> Printf.sprintf "Unsupported string encoding: %d" enc
+  | `UnsupportedValueType typ -> Printf.sprintf "Unsupported value type: %d" typ
+  | `IoError msg -> Printf.sprintf "I/O error: %s" msg
+
 let opcode_eof = 0xFF
 let opcode_selectdb = 0xFE
 let opcode_expiretime = 0xFD
@@ -190,15 +210,24 @@ let rec parse_pairs data pos acc =
 
 let parse_file filename =
   try
-    let ic = open_in_bin filename in
-    let len = in_channel_length ic in
-    let data = really_input_string ic len in
-    close_in ic;
+    In_channel.with_open_bin filename (fun ic ->
+      let data = In_channel.input_all ic in
 
-    if String.length data < 9 || String.sub data 0 5 <> "REDIS" then
-      []
-    else
-      parse_pairs data 9 []
+      if String.length data < 9 then
+        Error `InvalidHeader
+      else if String.sub data 0 5 <> "REDIS" then
+        Error `InvalidHeader
+      else
+        Ok (parse_pairs data 9 [])
+    )
   with
-  | _ ->
-      []
+  | Sys_error msg ->
+      if String.contains msg ':' then
+        (* Extract just the filename from "filename: No such file or directory" *)
+        Error (`FileNotFound filename)
+      else
+        Error (`IoError msg)
+  | End_of_file ->
+      Error (`UnexpectedEOF "file header")
+  | exn ->
+      Error (`IoError (Printexc.to_string exn))

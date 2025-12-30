@@ -129,7 +129,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
           (* Process the command from master *)
           let* () =
             match Command.parse cmd with
-            | Some parsed_cmd ->
+            | Ok parsed_cmd ->
                 (* Execute command *)
                 let current_time = Unix.gettimeofday () in
                 let* response_opt =
@@ -156,7 +156,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
                 | _ ->
                     (* No response for SET or other replication commands *)
                     Lwt.return_unit)
-            | None ->
+            | Error _ ->
                 (* Ignore unparseable commands from master *)
                 Lwt.return_unit
           in

@@ -1,10 +1,14 @@
 (* Redis command types and execution *)
 
-(* Validation errors for command parameters *)
-type validation_error =
-  | InvalidExpiry of int
-  | InvalidPort of int
-  | InvalidTimeout of int
+(* Command parsing/validation errors *)
+type error = [
+  | `InvalidExpiry of int
+  | `InvalidPort of int
+  | `InvalidTimeout of int
+  | `InvalidNumReplicas of int
+  | `UnknownCommand
+  | `MalformedCommand of string
+]
 
 type replconf_command =
   | ReplconfListeningPort of int
@@ -46,20 +50,20 @@ type t =
 (* Validation functions *)
 let validate_set_params params =
   match params.expiry_ms with
-  | Some ms when ms < 0 -> Error (InvalidExpiry ms)
+  | Some ms when ms < 0 -> Error (`InvalidExpiry ms)
   | _ -> Ok ()
 
 let validate_replconf_port port =
   if port < 1 || port > 65535 then
-    Error (InvalidPort port)
+    Error (`InvalidPort port)
   else
     Ok ()
 
 let validate_wait_params params =
   if params.timeout_ms < 0 then
-    Error (InvalidTimeout params.timeout_ms)
+    Error (`InvalidTimeout params.timeout_ms)
   else if params.num_replicas < 0 then
-    Error (InvalidTimeout params.num_replicas) (* Reuse InvalidTimeout for simplicity *)
+    Error (`InvalidNumReplicas params.num_replicas)
   else
     Ok ()
 
@@ -81,44 +85,44 @@ let parse_replconf = function
            (match int_of_string_opt arg2 with
             | Some port ->
                 (match validate_replconf_port port with
-                 | Ok () -> Some (Replconf (ReplconfListeningPort port))
-                 | Error _ -> None) (* Reject invalid port *)
-            | None -> None)
+                 | Ok () -> Ok (Replconf (ReplconfListeningPort port))
+                 | Error _ as e -> e)
+            | None -> Error (`MalformedCommand "REPLCONF listening-port requires integer"))
        | "capa" ->
-           Some (Replconf (ReplconfCapa arg2))
+           Ok (Replconf (ReplconfCapa arg2))
        | "getack" ->
-           Some (Replconf ReplconfGetAck)
-       | _ -> None)
-  | _ -> None
+           Ok (Replconf ReplconfGetAck)
+       | _ -> Error (`MalformedCommand ("Unknown REPLCONF subcommand: " ^ arg1)))
+  | _ -> Error (`MalformedCommand "REPLCONF requires exactly 2 arguments")
 
 (* Parse a RESP value into a command *)
 let parse = function
   | Resp.Array [ Resp.BulkString cmd ]
     when String.lowercase_ascii cmd = "ping" ->
-      Some Ping
+      Ok Ping
 
   | Resp.Array [ Resp.BulkString cmd; msg ]
     when String.lowercase_ascii cmd = "echo" ->
-      Some (Echo msg)
+      Ok (Echo msg)
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
     when String.lowercase_ascii cmd = "get" ->
-      Some (Get key)
+      Ok (Get key)
 
   | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: value :: rest)
     when String.lowercase_ascii cmd = "set" ->
       let expiry_ms, _ = parse_duration rest in
       let params = { key; value; expiry_ms } in
       (match validate_set_params params with
-       | Ok () -> Some (Set params)
-       | Error _ -> None) (* Reject invalid expiry *)
+       | Ok () -> Ok (Set params)
+       | Error _ as e -> e)
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString section ]
     when String.lowercase_ascii cmd = "info" ->
       if String.contains (String.lowercase_ascii section) 'r' then
-        Some InfoReplication
+        Ok InfoReplication
       else
-        None
+        Error (`MalformedCommand "INFO requires 'replication' section")
 
   | Resp.Array (Resp.BulkString cmd :: args)
     when String.lowercase_ascii cmd = "replconf" ->
@@ -127,7 +131,7 @@ let parse = function
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString replication_id; Resp.BulkString offset_str ]
     when String.lowercase_ascii cmd = "psync" ->
       let offset = int_of_string_opt offset_str |> Option.value ~default:(-1) in
-      Some (Psync { replication_id; offset })
+      Ok (Psync { replication_id; offset })
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString num_replicas_str; Resp.BulkString timeout_str ]
     when String.lowercase_ascii cmd = "wait" ->
@@ -135,20 +139,23 @@ let parse = function
        | Some num_replicas, Some timeout_ms ->
            let params = { num_replicas; timeout_ms } in
            (match validate_wait_params params with
-            | Ok () -> Some (Wait params)
-            | Error _ -> None) (* Reject invalid timeout or num_replicas *)
-       | _ -> None)
+            | Ok () -> Ok (Wait params)
+            | Error _ as e -> e)
+       | _ -> Error (`MalformedCommand "WAIT requires two integer arguments"))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString subcommand; Resp.BulkString param ]
     when String.lowercase_ascii cmd = "config" && String.lowercase_ascii subcommand = "get" ->
       (match String.lowercase_ascii param with
-       | "dir" -> Some (ConfigGet Dir)
-       | "dbfilename" -> Some (ConfigGet Dbfilename)
-       | _ -> None) (* Unknown parameter *)
+       | "dir" -> Ok (ConfigGet Dir)
+       | "dbfilename" -> Ok (ConfigGet Dbfilename)
+       | _ -> Error (`MalformedCommand ("Unknown CONFIG parameter: " ^ param)))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString pattern ]
     when String.lowercase_ascii cmd = "keys" ->
-      Some (Keys pattern)
+      Ok (Keys pattern)
 
-  | _ -> None
+  | Resp.Array (Resp.BulkString _cmd :: _) ->
+      Error `UnknownCommand
 
+  | _ ->
+      Error (`MalformedCommand "Expected RESP Array with command")

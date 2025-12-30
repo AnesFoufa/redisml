@@ -63,15 +63,17 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   (* Spawn background task to read FULLRESYNC, RDB, and process commands from master *)
   let _ = Lwt.async (fun () ->
     (* Read FULLRESYNC response using RESP parsing, then manually read RDB *)
-    let buffer = ref "" in
+    let buffer = Buffer.create 4096 in
     let rec read_fullresync () =
       let* data = Lwt_io.read ~count:4096 ic in
-      buffer := !buffer ^ data;
+      Buffer.add_string buffer data;
 
       (* Try to parse FULLRESYNC response *)
-      match Resp.parse !buffer with
+      let contents = Buffer.contents buffer in
+      match Resp.parse contents with
       | Some (_resp, rest) ->
-          buffer := rest;
+          Buffer.clear buffer;
+          Buffer.add_string buffer rest;
           let* () = Lwt_io.eprintlf "Received FULLRESYNC from master" in
           Lwt.return ()
       | None ->
@@ -82,23 +84,26 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
 
     (* Now manually read RDB file as bulk string: $<length>\r\n<data> *)
     let rec read_rdb_header () =
-      if String.length !buffer > 0 && !buffer.[0] = '$' then (
+      let contents = Buffer.contents buffer in
+      if String.length contents > 0 && contents.[0] = '$' then (
         (* Find \r\n to get the length *)
         try
-          let newline_pos = String.index !buffer '\n' in
-          let length_str = String.sub !buffer 1 (newline_pos - 2) in  (* Skip $ and \r\n *)
+          let newline_pos = String.index contents '\n' in
+          let length_str = String.sub contents 1 (newline_pos - 2) in  (* Skip $ and \r\n *)
           let rdb_length = int_of_string length_str in
-          buffer := String.sub !buffer (newline_pos + 1) (String.length !buffer - newline_pos - 1);
+          let remaining = String.sub contents (newline_pos + 1) (String.length contents - newline_pos - 1) in
+          Buffer.clear buffer;
+          Buffer.add_string buffer remaining;
           Lwt.return rdb_length
         with Not_found ->
           (* Need more data *)
           let* data = Lwt_io.read ~count:4096 ic in
-          buffer := !buffer ^ data;
+          Buffer.add_string buffer data;
           read_rdb_header ()
       ) else (
         (* Need more data *)
         let* data = Lwt_io.read ~count:4096 ic in
-        buffer := !buffer ^ data;
+        Buffer.add_string buffer data;
         read_rdb_header ()
       )
     in
@@ -106,14 +111,17 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
 
     (* Read exactly rdb_length bytes *)
     let rec read_rdb_data needed =
-      if String.length !buffer >= needed then (
-        let _rdb_data = String.sub !buffer 0 needed in
-        buffer := String.sub !buffer needed (String.length !buffer - needed);
+      let contents = Buffer.contents buffer in
+      if String.length contents >= needed then (
+        let _rdb_data = String.sub contents 0 needed in
+        let remaining = String.sub contents needed (String.length contents - needed) in
+        Buffer.clear buffer;
+        Buffer.add_string buffer remaining;
         let* () = Lwt_io.eprintlf "Received RDB file (%d bytes)" needed in
         Lwt.return ()
       ) else (
         let* data = Lwt_io.read ~count:4096 ic in
-        buffer := !buffer ^ data;
+        Buffer.add_string buffer data;
         read_rdb_data needed
       )
     in
@@ -123,9 +131,11 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
 
     (* Parse and process commands from buffer *)
     let rec process_buffer () =
-      match Resp.parse !buffer with
+      let contents = Buffer.contents buffer in
+      match Resp.parse contents with
       | Some (cmd, rest) ->
-          buffer := rest;
+          Buffer.clear buffer;
+          Buffer.add_string buffer rest;
           (* Process the command from master *)
           let* () =
             match Command.parse cmd with
@@ -178,7 +188,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
             (* Master disconnected *)
             Lwt_io.eprintlf "Master connection closed"
           else (
-            buffer := !buffer ^ data;
+            Buffer.add_string buffer data;
             read_and_process_commands ()
           ))
         (fun exn ->

@@ -61,22 +61,15 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   let* () = Lwt_io.flush oc in
 
   (* Helper: Read and parse FULLRESYNC response *)
-  let read_fullresync_response ic buffer =
-    let rec loop () =
-      let* data = Lwt_io.read ~count:4096 ic in
-      Buffer.add_string buffer data;
-
-      let contents = Buffer.contents buffer in
-      match Resp.parse contents with
-      | Some (_resp, rest) ->
-          Buffer.clear buffer;
-          Buffer.add_string buffer rest;
-          let* () = Lwt_io.eprintlf "Received FULLRESYNC from master" in
-          Lwt.return ()
-      | None ->
-          loop ()
-    in
-    loop ()
+  let read_fullresync_response reader ic =
+    let* result = Buffer_reader.read_until_parsed reader ic ~count:4096 ~parser:Resp.parse in
+    match result with
+    | Ok _resp ->
+        Lwt_io.eprintlf "Received FULLRESYNC from master"
+    | Error `Eof ->
+        Lwt.fail_with "Master connection closed before FULLRESYNC"
+    | Error `BufferOverflow ->
+        Lwt.fail_with "FULLRESYNC response too large"
   in
 
   (* Helper: Read RDB file from buffer *)
@@ -121,67 +114,74 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   in
 
   (* Helper: Process commands already in buffer *)
-  let rec process_buffered_commands buffer database ic oc =
-    let contents = Buffer.contents buffer in
-    match Resp.parse contents with
-    | Some (cmd, rest) ->
-        Buffer.clear buffer;
-        Buffer.add_string buffer rest;
+  let process_buffered_commands reader database ic oc =
+    Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun cmd ->
+      match Command.parse cmd with
+      | Ok parsed_cmd ->
+          let current_time = Unix.gettimeofday () in
+          let* response_opt =
+            Database.handle_command database parsed_cmd
+              ~current_time
+              ~original_resp:cmd
+              ~ic
+              ~oc
+              ~address:"master"
+          in
+          let cmd_bytes = String.length (Resp.serialize cmd) in
+          Database.increment_offset database cmd_bytes;
 
-        let* () =
-          match Command.parse cmd with
-          | Ok parsed_cmd ->
-              let current_time = Unix.gettimeofday () in
-              let* response_opt =
-                Database.handle_command database parsed_cmd
-                  ~current_time
-                  ~original_resp:cmd
-                  ~ic
-                  ~oc
-                  ~address:"master"
-              in
-              let cmd_bytes = String.length (Resp.serialize cmd) in
-              Database.increment_offset database cmd_bytes;
-
-              (match parsed_cmd with
-               | Command.Replconf _ ->
-                   (match response_opt with
-                    | Some resp ->
-                        let* () = Lwt_io.write oc (Resp.serialize resp) in
-                        Lwt_io.flush oc
-                    | None -> Lwt.return_unit)
-               | _ -> Lwt.return_unit)
-          | Error _ -> Lwt.return_unit
-        in
-        process_buffered_commands buffer database ic oc
-    | None -> Lwt.return_unit
+          (match parsed_cmd with
+           | Command.Replconf _ ->
+               (match response_opt with
+                | Some resp ->
+                    let* () = Lwt_io.write oc (Resp.serialize resp) in
+                    Lwt_io.flush oc
+                | None -> Lwt.return_unit)
+           | _ -> Lwt.return_unit)
+      | Error _ -> Lwt.return_unit
+    )
   in
 
   (* Spawn background task to handle replication stream *)
   let _ = Lwt.async (fun () ->
-    let buffer = Buffer.create 4096 in
+    let reader = Buffer_reader.create () in
+    let buffer = Buffer.create 4096 in  (* For RDB reading which has custom format *)
 
     (* Read FULLRESYNC response *)
-    let* () = read_fullresync_response ic buffer in
+    let* () = read_fullresync_response reader ic in
 
-    (* Read RDB file *)
+    (* Read RDB file - copy data from reader to buffer for custom RDB parsing *)
+    let () =
+      let contents = Buffer_reader.contents reader in
+      Buffer.add_string buffer contents;
+      Buffer_reader.reset reader None
+    in
     let* () = read_rdb_file ic buffer in
+
+    (* Copy any remaining data from RDB buffer back to reader *)
+    let () =
+      let remaining = Buffer.contents buffer in
+      Buffer.clear buffer;
+      Buffer_reader.reset reader (Some remaining)
+    in
 
     (* Continuously read and process commands from master *)
     let rec replication_loop () =
       Lwt.catch
         (fun () ->
           (* Process any commands already in buffer *)
-          let* () = process_buffered_commands buffer database ic oc in
+          let* () = process_buffered_commands reader database ic oc in
 
           (* Read more data from master *)
-          let* data = Lwt_io.read ~count:4096 ic in
-          if String.length data = 0 then
-            Lwt_io.eprintlf "Master connection closed"
-          else (
-            Buffer.add_string buffer data;
-            replication_loop ()
-          ))
+          let* result = Buffer_reader.read_from_channel reader ic ~count:4096 in
+          match result with
+          | `Eof ->
+              Lwt_io.eprintlf "Master connection closed"
+          | `BufferOverflow ->
+              Lwt_io.eprintlf "Master sent too much data"
+          | `Ok ->
+              replication_loop ()
+        )
         (fun exn ->
           Lwt_io.eprintlf "Error processing master commands: %s" (Printexc.to_string exn))
     in

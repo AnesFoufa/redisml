@@ -11,6 +11,7 @@ let min_wait_timeout_ms = 1000
 
 (* Buffer sizes *)
 let protocol_read_buffer = 4096
+let protocol_max_buffer = 10 * 1024 * 1024  (* 10MB max accumulated buffer *)
 let replica_response_buffer = 1024
 let initial_storage_capacity = 1024
 

@@ -27,29 +27,39 @@ let handle_connection ~client_addr ~channels:(ic, oc)
           (* Connection closed *)
           Lwt.return_unit
         else (
-          (* Add to buffer *)
-          Buffer.add_string buffer data;
+          (* Check buffer size before adding data (DOS protection) *)
+          let current_size = Buffer.length buffer in
+          let new_size = current_size + String.length data in
+          if new_size > Constants.protocol_max_buffer then (
+            (* Buffer too large - disconnect client *)
+            let* () = Lwt_io.eprintlf "Client %s exceeded buffer limit (%d bytes), disconnecting"
+              addr_str new_size in
+            Lwt.return_unit
+          ) else (
+            (* Add to buffer *)
+            Buffer.add_string buffer data;
 
-          (* Try to parse and process commands from buffer *)
-          let rec process_buffer () =
-            let contents = Buffer.contents buffer in
-            match Resp.parse contents with
-            | Some (cmd, rest) ->
-                (* Successfully parsed a command *)
-                Buffer.clear buffer;
-                Buffer.add_string buffer rest;
+            (* Try to parse and process commands from buffer *)
+            let rec process_buffer () =
+              let contents = Buffer.contents buffer in
+              match Resp.parse contents with
+              | Some (cmd, rest) ->
+                  (* Successfully parsed a command *)
+                  Buffer.clear buffer;
+                  Buffer.add_string buffer rest;
 
-                (* Execute command - handler sends response *)
-                let* () = command_handler cmd ic oc addr_str in
+                  (* Execute command - handler sends response *)
+                  let* () = command_handler cmd ic oc addr_str in
 
-                process_buffer ()
-            | None ->
-                (* Incomplete command, wait for more data *)
-                Lwt.return_unit
-          in
+                  process_buffer ()
+              | None ->
+                  (* Incomplete command, wait for more data *)
+                  Lwt.return_unit
+            in
 
-          let* () = process_buffer () in
-          loop ()
+            let* () = process_buffer () in
+            loop ()
+          )
         ))
       (fun exn ->
         match exn with
@@ -62,4 +72,15 @@ let handle_connection ~client_addr ~channels:(ic, oc)
             (* Connection error or closed *)
             Lwt.return_unit)
   in
-  loop ()
+
+  (* Wrap in finalize to ensure channels are closed on error *)
+  Lwt.finalize
+    (fun () -> loop ())
+    (fun () ->
+      Lwt.catch
+        (fun () ->
+          let* () = Lwt_io.close ic in
+          Lwt_io.close oc)
+        (fun _exn ->
+          (* Ignore errors during cleanup *)
+          Lwt.return_unit))

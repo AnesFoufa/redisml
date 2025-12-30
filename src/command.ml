@@ -47,25 +47,22 @@ type t =
   | ConfigGet of config_param
   | Keys of string
 
-(* Validation functions *)
+(* Validation functions using Validation framework *)
 let validate_set_params params =
-  match params.expiry_ms with
-  | Some ms when ms < 0 -> Error (`InvalidExpiry ms)
-  | _ -> Ok ()
+  Validation.validate_option
+    (Validation.expiry_ms ~error:(fun ms -> `InvalidExpiry ms))
+    params.expiry_ms
+  |> Result.map (fun _ -> ())
 
 let validate_replconf_port port =
-  if port < 1 || port > 65535 then
-    Error (`InvalidPort port)
-  else
-    Ok ()
+  Validation.port ~error:(fun p -> `InvalidPort p) port
+  |> Result.map (fun _ -> ())
 
 let validate_wait_params params =
-  if params.timeout_ms < 0 then
-    Error (`InvalidTimeout params.timeout_ms)
-  else if params.num_replicas < 0 then
-    Error (`InvalidNumReplicas params.num_replicas)
-  else
-    Ok ()
+  Validation.validate_all [
+    (fun () -> Validation.timeout_ms ~error:(fun t -> `InvalidTimeout t) params.timeout_ms |> Result.map (fun _ -> ()));
+    (fun () -> Validation.replica_count ~error:(fun n -> `InvalidNumReplicas n) params.num_replicas |> Result.map (fun _ -> ()));
+  ]
 
 (* Parse duration options for SET command - returns milliseconds *)
 let parse_duration = function

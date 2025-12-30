@@ -60,15 +60,12 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   let* () = Lwt_io.write oc (Resp.serialize psync_cmd) in
   let* () = Lwt_io.flush oc in
 
-  (* Spawn background task to read FULLRESYNC, RDB, and process commands from master *)
-  let _ = Lwt.async (fun () ->
-    (* Read FULLRESYNC response using RESP parsing, then manually read RDB *)
-    let buffer = Buffer.create 4096 in
-    let rec read_fullresync () =
+  (* Helper: Read and parse FULLRESYNC response *)
+  let read_fullresync_response ic buffer =
+    let rec loop () =
       let* data = Lwt_io.read ~count:4096 ic in
       Buffer.add_string buffer data;
 
-      (* Try to parse FULLRESYNC response *)
       let contents = Buffer.contents buffer in
       match Resp.parse contents with
       | Some (_resp, rest) ->
@@ -77,43 +74,37 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
           let* () = Lwt_io.eprintlf "Received FULLRESYNC from master" in
           Lwt.return ()
       | None ->
-          (* Need more data for FULLRESYNC *)
-          read_fullresync ()
+          loop ()
     in
-    let* () = read_fullresync () in
+    loop ()
+  in
 
-    (* Now manually read RDB file as bulk string: $<length>\r\n<data> *)
-    let rec read_rdb_header () =
+  (* Helper: Read RDB file from buffer *)
+  let read_rdb_file ic buffer =
+    let rec read_header () =
       let contents = Buffer.contents buffer in
       if String.length contents > 0 && contents.[0] = '$' then (
-        (* Find \r\n to get the length *)
         try
           let newline_pos = String.index contents '\n' in
-          let length_str = String.sub contents 1 (newline_pos - 2) in  (* Skip $ and \r\n *)
+          let length_str = String.sub contents 1 (newline_pos - 2) in
           let rdb_length = int_of_string length_str in
           let remaining = String.sub contents (newline_pos + 1) (String.length contents - newline_pos - 1) in
           Buffer.clear buffer;
           Buffer.add_string buffer remaining;
           Lwt.return rdb_length
         with Not_found ->
-          (* Need more data *)
           let* data = Lwt_io.read ~count:4096 ic in
           Buffer.add_string buffer data;
-          read_rdb_header ()
+          read_header ()
       ) else (
-        (* Need more data *)
         let* data = Lwt_io.read ~count:4096 ic in
         Buffer.add_string buffer data;
-        read_rdb_header ()
+        read_header ()
       )
     in
-    let* rdb_length = read_rdb_header () in
-
-    (* Read exactly rdb_length bytes *)
-    let rec read_rdb_data needed =
+    let rec read_data needed =
       let contents = Buffer.contents buffer in
       if String.length contents >= needed then (
-        let _rdb_data = String.sub contents 0 needed in
         let remaining = String.sub contents needed (String.length contents - needed) in
         Buffer.clear buffer;
         Buffer.add_string buffer remaining;
@@ -122,79 +113,79 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
       ) else (
         let* data = Lwt_io.read ~count:4096 ic in
         Buffer.add_string buffer data;
-        read_rdb_data needed
+        read_data needed
       )
     in
-    let* () = read_rdb_data rdb_length in
+    let* rdb_length = read_header () in
+    read_data rdb_length
+  in
 
-    (* Buffer now contains commands from master *)
+  (* Helper: Process commands already in buffer *)
+  let rec process_buffered_commands buffer database ic oc =
+    let contents = Buffer.contents buffer in
+    match Resp.parse contents with
+    | Some (cmd, rest) ->
+        Buffer.clear buffer;
+        Buffer.add_string buffer rest;
 
-    (* Parse and process commands from buffer *)
-    let rec process_buffer () =
-      let contents = Buffer.contents buffer in
-      match Resp.parse contents with
-      | Some (cmd, rest) ->
-          Buffer.clear buffer;
-          Buffer.add_string buffer rest;
-          (* Process the command from master *)
-          let* () =
-            match Command.parse cmd with
-            | Ok parsed_cmd ->
-                (* Execute command *)
-                let current_time = Unix.gettimeofday () in
-                let* response_opt =
-                  Database.handle_command database parsed_cmd
-                    ~current_time
-                    ~original_resp:cmd
-                    ~ic
-                    ~oc
-                    ~address:"master"
-                in
-                (* Increment replication offset by bytes processed *)
-                let cmd_bytes = String.length (Resp.serialize cmd) in
-                Database.increment_offset database cmd_bytes;
+        let* () =
+          match Command.parse cmd with
+          | Ok parsed_cmd ->
+              let current_time = Unix.gettimeofday () in
+              let* response_opt =
+                Database.handle_command database parsed_cmd
+                  ~current_time
+                  ~original_resp:cmd
+                  ~ic
+                  ~oc
+                  ~address:"master"
+              in
+              let cmd_bytes = String.length (Resp.serialize cmd) in
+              Database.increment_offset database cmd_bytes;
 
-                (* Only send response for REPLCONF commands, not for write commands like SET *)
-                (match parsed_cmd with
-                | Command.Replconf _ ->
-                    (* REPLCONF GETACK needs a response *)
-                    (match response_opt with
+              (match parsed_cmd with
+               | Command.Replconf _ ->
+                   (match response_opt with
                     | Some resp ->
                         let* () = Lwt_io.write oc (Resp.serialize resp) in
                         Lwt_io.flush oc
                     | None -> Lwt.return_unit)
-                | _ ->
-                    (* No response for SET or other replication commands *)
-                    Lwt.return_unit)
-            | Error _ ->
-                (* Ignore unparseable commands from master *)
-                Lwt.return_unit
-          in
-          process_buffer ()
-      | None ->
-          (* Incomplete command, need more data *)
-          Lwt.return_unit
-    in
+               | _ -> Lwt.return_unit)
+          | Error _ -> Lwt.return_unit
+        in
+        process_buffered_commands buffer database ic oc
+    | None -> Lwt.return_unit
+  in
 
-    let rec read_and_process_commands () =
+  (* Spawn background task to handle replication stream *)
+  let _ = Lwt.async (fun () ->
+    let buffer = Buffer.create 4096 in
+
+    (* Read FULLRESYNC response *)
+    let* () = read_fullresync_response ic buffer in
+
+    (* Read RDB file *)
+    let* () = read_rdb_file ic buffer in
+
+    (* Continuously read and process commands from master *)
+    let rec replication_loop () =
       Lwt.catch
         (fun () ->
-          (* First process any data already in buffer *)
-          let* () = process_buffer () in
+          (* Process any commands already in buffer *)
+          let* () = process_buffered_commands buffer database ic oc in
 
-          (* Then read more data from master *)
+          (* Read more data from master *)
           let* data = Lwt_io.read ~count:4096 ic in
           if String.length data = 0 then
-            (* Master disconnected *)
             Lwt_io.eprintlf "Master connection closed"
           else (
             Buffer.add_string buffer data;
-            read_and_process_commands ()
+            replication_loop ()
           ))
         (fun exn ->
           Lwt_io.eprintlf "Error processing master commands: %s" (Printexc.to_string exn))
     in
-    read_and_process_commands ()
+    replication_loop ()
   ) in
 
   Lwt.return_unit

@@ -25,10 +25,14 @@ let create config =
   (match config.dir, config.dbfilename with
    | Some dir, Some dbfilename ->
        let filepath = Filename.concat dir dbfilename in
-       let pairs = Rdb.parse_file filepath in
-       List.iter (fun (key, _value, expiry) ->
-         Storage.set storage key _value expiry
-       ) pairs
+       (match Rdb.parse_file filepath with
+        | Ok pairs ->
+            List.iter (fun (key, _value, expiry) ->
+              Storage.set storage key _value expiry
+            ) pairs
+        | Error err ->
+            Printf.eprintf "Warning: Failed to load RDB file: %s\n%!"
+              (Rdb.error_to_string err))
    | _ -> ());
 
   {
@@ -184,6 +188,5 @@ let increment_offset db bytes =
   | Replica state ->
       state.replication_offset <- state.replication_offset + bytes
   | Master _ ->
-      (* This should never happen - it's a programming error, not a user error *)
-      (* Log the error but don't crash the server *)
-      Printf.eprintf "BUG: increment_offset called on master database\n%!"
+      (* This should never happen - it's a programming invariant violation *)
+      failwith "increment_offset called on master database (programming error)"

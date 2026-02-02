@@ -36,22 +36,25 @@ let handle_command resp_cmd ic oc addr =
   match step_or_err with
   | Ok (`Reply resp) ->
       let* () = Lwt_io.write oc (Resp.serialize resp) in
-      Lwt_io.flush oc
-  | Ok `NoReply -> Lwt.return_unit
-  | Ok `Takeover -> raise Protocol.Replication_takeover
+      let* () = Lwt_io.flush oc in
+      Lwt.return `Continue
+  | Ok `NoReply -> Lwt.return `Continue
+  | Ok `Takeover -> Lwt.return `Takeover
   | Error `ReadOnlyReplica ->
       let* () =
         Lwt_io.write oc
           (Resp.serialize
              (Resp.SimpleError "READONLY You can't write against a read only replica."))
       in
-      Lwt_io.flush oc
+      let* () = Lwt_io.flush oc in
+      Lwt.return `Continue
   | Error (#Command.error as err) ->
       let error_msg = error_to_string err in
       let* () =
         Lwt_io.write oc (Resp.serialize (Resp.SimpleError ("ERR " ^ error_msg)))
       in
-      Lwt_io.flush oc
+      let* () = Lwt_io.flush oc in
+      Lwt.return `Continue
 
 (* Start the server *)
 let start_server () =

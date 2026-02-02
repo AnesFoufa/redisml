@@ -1,11 +1,11 @@
 (* Redis protocol connection handler *)
 
-(* Exception to signal that connection should be handed over to replication *)
-exception Replication_takeover
+(* Next-step requested by the command handler. *)
+type handler_step = [ `Continue | `Takeover ]
 
 (* Callback type for command processing - receives command, input/output channels, and client address.
    The handler is responsible for sending the response. *)
-type command_handler = Resp.t -> Lwt_io.input_channel -> Lwt_io.output_channel -> string -> unit Lwt.t
+type command_handler = Resp.t -> Lwt_io.input_channel -> Lwt_io.output_channel -> string -> handler_step Lwt.t
 
 (* Handle a client connection - reads commands, processes, and sends responses *)
 val handle_connection :

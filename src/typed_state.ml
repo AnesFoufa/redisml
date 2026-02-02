@@ -46,6 +46,11 @@ let fold_any (t : any_database) ~(master : master database -> 'a)
 let storage (db : 'r database) = db.storage
 let config (db : 'r database) = db.config
 
+let is_master (type r) (db : r database) : bool =
+  match db.role with
+  | Master_state _ -> true
+  | Replica_state _ -> false
+
 let replicas (db : master database) =
   let (Master_state { replicas }) = db.role in
   replicas

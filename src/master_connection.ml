@@ -113,29 +113,25 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
     read_data rdb_length
   in
 
-  (* Helper: Process commands already in buffer *)
-  let upstream_conn = Peer_conn.upstream_master ~ic ~oc in
+  (* Helper: Execute a typed replication command and handle response *)
+  let execute_and_respond : type r. r Repl_command.t -> resp_cmd:Resp.t -> unit Lwt.t =
+    fun cmd ~resp_cmd ->
+      let current_time = Unix.gettimeofday () in
+      let cmd_bytes = String.length (Resp.serialize resp_cmd) in
+      Database.increment_offset database cmd_bytes;
+      match Database.execute_repl database cmd ~current_time with
+      | Database.No_response -> Lwt.return_unit
+      | Database.Must_respond resp ->
+          let* () = Lwt_io.write oc (Resp.serialize resp) in
+          Lwt_io.flush oc
+  in
 
+  (* Helper: Process commands already in buffer *)
   let process_buffered_commands reader =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun resp_cmd ->
-      (* Extra safety: only accept a small subset of upstream-master stream commands. *)
       match Repl_command.parse resp_cmd with
       | Error _ -> Lwt.return_unit
-      | Ok _repl_cmd ->
-          let current_time = Unix.gettimeofday () in
-          let* result =
-            Database.handle_replication_resp database resp_cmd ~current_time upstream_conn
-          in
-          (match result with
-          | Ok resp_opt ->
-              let cmd_bytes = String.length (Resp.serialize resp_cmd) in
-              Database.increment_offset database cmd_bytes;
-              (match resp_opt with
-              | None -> Lwt.return_unit
-              | Some resp ->
-                  let* () = Lwt_io.write oc (Resp.serialize resp) in
-                  Lwt_io.flush oc)
-          | Error _ -> Lwt.return_unit))
+      | Ok (Repl_command.Packed cmd) -> execute_and_respond cmd ~resp_cmd)
   in
 
   (* Spawn background task to handle replication stream *)

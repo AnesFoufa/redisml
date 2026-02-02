@@ -5,27 +5,32 @@
 
     This is intentionally separate from {!User_command} to prevent accidentally
     treating master-stream traffic as user traffic.
+
+    The type is a GADT indexed by whether a response is required, enabling
+    compile-time enforcement of response handling.
 *)
 
-type t =
-  | Apply_set of Command.set_params
-  | Replconf_getack
-  | Ignore
+(** Phantom type: command requires a response to master *)
+type response_required
+
+(** Phantom type: command does not require a response *)
+type no_response
+
+(** Replication command GADT indexed by response requirement *)
+type _ t =
+  | Apply_set : Command.set_params -> no_response t
+  | Replconf_getack : response_required t
+  | Ignore : no_response t
+
+(** Existential wrapper for parsing (response type unknown until runtime) *)
+type packed = Packed : _ t -> packed
 
 type parse_error =
   [ Command.error
   | `DisallowedFromMaster
   ]
 
-val parse : Resp.t -> (t, parse_error) result
+val parse : Resp.t -> (packed, parse_error) result
 (** Parse a RESP value received from the upstream master into a replication-stream
-    command classification.
-*)
-
-val to_command : t -> Command.t option
-(** Convert to the existing untyped [Command.t] when appropriate.
-
-    - [Apply_set] -> [Some (Command.Set ...)]
-    - [Replconf_getack] -> [Some (Command.Replconf Command.ReplconfGetAck)]
-    - [Ignore] -> [None]
-*)
+    command classification. Returns a [packed] existential since the response
+    type is determined at runtime. *)

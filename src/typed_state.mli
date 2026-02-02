@@ -46,6 +46,7 @@ val fold_any : any_database -> master:(master database -> 'a) -> replica:(replic
 (** Basic accessors. *)
 val storage : 'r database -> Storage.t
 val config : 'r database -> Config.t
+val is_master : 'r database -> bool
 
 (** Master-only accessors. *)
 val replicas : master database -> Replica_manager.t

@@ -31,6 +31,9 @@ type parse_error =
 
 type parsed_for_master = [ `Read of read t | `Write of write t | `Disallowed ]
 
+val of_command_for_user : Command.t -> parsed_for_master
+(** Classify an already-parsed command into read/write/disallowed. *)
+
 val parse_for_master : Resp.t -> (parsed_for_master, parse_error) result
 (** Parse a user command for a master.
 

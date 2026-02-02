@@ -37,140 +37,127 @@ let get_config (server : server) : Config.t =
   | Master db -> config db
   | Replica db -> config db
 
-(* ===== Pure execution (role-aware) ===== *)
+(* ===== Typed execution functions ===== *)
 
-let execute_common ~(storage : Storage.t) ~(config : Config.t) (cmd : Command.t)
-    ~current_time : Resp.t =
-  match cmd with
-  | Command.Ping -> Resp.SimpleString "PONG"
-  | Command.Echo msg -> msg
-  | Command.Get key -> (
-      match Storage.get storage ~current_time key with
-      | Some resp_value -> resp_value
-      | None -> Resp.Null)
-  | Command.Set { key; value; expiry_ms } ->
-      let expires_at =
-        match expiry_ms with
-        | Some ms -> Some (current_time +. (float ms /. 1000.0))
-        | None -> None
-      in
-      Storage.set storage key value expires_at;
-      Resp.SimpleString "OK"
-  | Command.ConfigGet param ->
-      let param_name, param_value =
-        match param with
-        | Command.Dir -> "dir", Option.value ~default:"" config.dir
-        | Command.Dbfilename -> "dbfilename", Option.value ~default:"" config.dbfilename
-      in
-      Resp.Array [ Resp.BulkString param_name; Resp.BulkString param_value ]
-  | Command.Keys _pattern ->
-      let keys = Storage.keys storage ~current_time in
-      Resp.Array (List.map (fun k -> Resp.BulkString k) keys)
-  | _ -> Resp.SimpleError "ERR unsupported command"
+(* Execute a read command - works on any role *)
+let execute_read : type r. r db -> User_command.read User_command.t -> current_time:float -> Resp.t =
+  fun db cmd ~current_time ->
+    let st = storage db in
+    let cfg = config db in
+    (* GADT exhaustiveness: Set : write t cannot appear when cmd : read t *)
+    (match[@warning "-8"] cmd with
+    | User_command.Ping -> Resp.SimpleString "PONG"
+    | User_command.Echo msg -> msg
+    | User_command.Get key -> (
+        match Storage.get st ~current_time key with
+        | Some resp_value -> resp_value
+        | None -> Resp.Null)
+    | User_command.InfoReplication ->
+        let role_str = if is_master db then "master" else "slave" in
+        let info =
+          Printf.sprintf "# Replication\nrole:%s\nmaster_replid:%s\nmaster_repl_offset:%d"
+            role_str Constants.master_repl_id Constants.master_repl_offset
+        in
+        Resp.BulkString info
+    | User_command.ConfigGet param ->
+        let param_name, param_value =
+          match param with
+          | Command.Dir -> "dir", Option.value ~default:"" cfg.dir
+          | Command.Dbfilename -> "dbfilename", Option.value ~default:"" cfg.dbfilename
+        in
+        Resp.Array [ Resp.BulkString param_name; Resp.BulkString param_value ]
+    | User_command.Keys _pattern ->
+        let keys = Storage.keys st ~current_time in
+        Resp.Array (List.map (fun k -> Resp.BulkString k) keys))
 
-let execute_master (db : master db) (cmd : Command.t) ~current_time : Resp.t =
-  let storage = storage db in
-  let cfg = config db in
-  match cmd with
-  | Command.InfoReplication ->
-      let info =
-        Printf.sprintf "# Replication\nrole:%s\nmaster_replid:%s\nmaster_repl_offset:%d"
-          "master" Constants.master_repl_id Constants.master_repl_offset
-      in
-      Resp.BulkString info
-  | Command.Psync { replication_id = _; offset = _ } ->
-      Resp.SimpleString
-        (Printf.sprintf "FULLRESYNC %s %d" Constants.master_repl_id
-           Constants.master_repl_offset)
-  | Command.Replconf replconf_cmd -> (
-      match replconf_cmd with
-      | Command.ReplconfGetAck -> Resp.SimpleError "ERR GETACK received on master"
-      | _ -> Resp.SimpleString "OK")
-  | Command.Wait _ ->
-      (* WAIT is handled specially in handle_command because it needs async I/O *)
-      Resp.SimpleError "ERR WAIT must be handled via handle_command"
-  | _ -> execute_common ~storage ~config:cfg cmd ~current_time
+(* Execute a write command - master only (compile-time enforced) *)
+let execute_write : master db -> User_command.write User_command.t -> current_time:float -> Resp.t =
+  fun db cmd ~current_time ->
+    let st = storage db in
+    (* GADT exhaustiveness: read constructors cannot appear when cmd : write t *)
+    (match[@warning "-8"] cmd with
+    | User_command.Set { key; value; expiry_ms } ->
+        let expires_at =
+          match expiry_ms with
+          | Some ms -> Some (current_time +. (float ms /. 1000.0))
+          | None -> None
+        in
+        Storage.set st key value expires_at;
+        Resp.SimpleString "OK")
 
-let execute_replica (db : replica db) (cmd : Command.t) ~current_time : Resp.t =
-  let storage = storage db in
-  let cfg = config db in
-  match cmd with
-  | Command.InfoReplication ->
-      let info =
-        Printf.sprintf "# Replication\nrole:%s\nmaster_replid:%s\nmaster_repl_offset:%d"
-          "slave" Constants.master_repl_id Constants.master_repl_offset
-      in
-      Resp.BulkString info
-  | Command.Psync _ -> Resp.SimpleError "ERR PSYNC not allowed on replica"
-  | Command.Wait _ -> Resp.SimpleError "ERR WAIT not allowed on replica"
-  | Command.Replconf replconf_cmd -> (
-      match replconf_cmd with
-      | Command.ReplconfGetAck ->
-          let offset = replica_offset db in
+(* Internal: apply a SET to replica storage (for replication stream) *)
+let apply_set_to_replica (db : replica db) (params : Command.set_params)
+    ~current_time : unit =
+  let st = storage db in
+  let expires_at =
+    match params.expiry_ms with
+    | Some ms -> Some (current_time +. (float ms /. 1000.0))
+    | None -> None
+  in
+  Storage.set st params.key params.value expires_at
+
+(* Type-indexed response for replication commands *)
+type _ repl_response =
+  | Must_respond : Resp.t -> Repl_command.response_required repl_response
+  | No_response : Repl_command.no_response repl_response
+
+(* Execute a replication command - replica only (compile-time enforced) *)
+let execute_repl : type r. replica db -> r Repl_command.t -> current_time:float -> r repl_response =
+  fun db cmd ~current_time ->
+    match cmd with
+    | Repl_command.Apply_set params ->
+        apply_set_to_replica db params ~current_time;
+        No_response
+    | Repl_command.Replconf_getack ->
+        let offset = replica_offset db in
+        let resp =
           Resp.Array
             [
               Resp.BulkString "REPLCONF";
               Resp.BulkString "ACK";
               Resp.BulkString (string_of_int offset);
             ]
-      | _ -> Resp.SimpleString "OK")
-  | _ -> execute_common ~storage ~config:cfg cmd ~current_time
+        in
+        Must_respond resp
+    | Repl_command.Ignore ->
+        No_response
 
 (* Determine if command should be propagated (master-only) *)
-let should_propagate_command (_db : master db) (cmd : Command.t) : bool =
-  match cmd with
-  | Command.Set _ -> true
-  | _ -> false
+let should_propagate : User_command.write User_command.t -> bool = fun cmd ->
+  (* GADT exhaustiveness: read constructors cannot appear when cmd : write t *)
+  (match[@warning "-8"] cmd with
+  | User_command.Set _ -> true)
 
-(* ===== Internal command handler (NOT EXPORTED) ===== *)
+(* ===== Internal command handler for master-specific commands ===== *)
 
-let handle_command_master (db : master db) cmd ~current_time ~original_resp ~ic ~oc
-    ~address =
+let handle_psync (db : master db) ~ic ~oc ~address =
   let open Lwt.Syntax in
-  match cmd with
-  | Command.Psync _ ->
-      (* PSYNC: Send FULLRESYNC response, then RDB, then register replica *)
-      let response = execute_master db cmd ~current_time in
-      let* () = Lwt_io.write oc (Resp.serialize response) in
-      let* () = Lwt_io.flush oc in
+  let response =
+    Resp.SimpleString
+      (Printf.sprintf "FULLRESYNC %s %d" Constants.master_repl_id
+         Constants.master_repl_offset)
+  in
+  let* () = Lwt_io.write oc (Resp.serialize response) in
+  let* () = Lwt_io.flush oc in
 
-      let rdb_response =
-        Printf.sprintf "$%d\r\n%s" (String.length Replica_manager.empty_rdb)
-          Replica_manager.empty_rdb
-      in
-      let* () = Lwt_io.write oc rdb_response in
-      let* () = Lwt_io.flush oc in
+  let rdb_response =
+    Printf.sprintf "$%d\r\n%s" (String.length Replica_manager.empty_rdb)
+      Replica_manager.empty_rdb
+  in
+  let* () = Lwt_io.write oc rdb_response in
+  let* () = Lwt_io.flush oc in
 
-      let* () = Replica_manager.register_replica (replicas db) ~ic ~oc ~address in
-      Lwt.return_none
+  let* () = Replica_manager.register_replica (replicas db) ~ic ~oc ~address in
+  Lwt.return `Takeover
 
-  | Command.Wait { num_replicas; timeout_ms } ->
-      let effective_timeout = max timeout_ms Constants.min_wait_timeout_ms in
-      let* num_acked =
-        Replica_manager.wait_for_replicas (replicas db) ~num_replicas
-          ~timeout_ms:effective_timeout
-      in
-      Lwt.return_some (Resp.Integer num_acked)
-
-  | _ ->
-      let response = execute_master db cmd ~current_time in
-
-      let* () =
-        if should_propagate_command db cmd then
-          let* () = Lwt_io.eprintlf "Propagating command to replicas" in
-          Replica_manager.propagate_to_replicas (replicas db) ~command:original_resp
-        else Lwt.return_unit
-      in
-
-      Lwt.return_some response
-
-let handle_command_replica (db : replica db) cmd ~current_time ~original_resp ~ic ~oc
-    ~address =
-  let _ = original_resp and _ = address in
-  (* Replicas do not propagate writes to other replicas in this implementation. *)
-  let response = execute_replica db cmd ~current_time in
-  let _ = ic and _ = oc in
-  Lwt.return_some response
+let handle_wait (db : master db) ~num_replicas ~timeout_ms =
+  let open Lwt.Syntax in
+  let effective_timeout = max timeout_ms Constants.min_wait_timeout_ms in
+  let* num_acked =
+    Replica_manager.wait_for_replicas (replicas db) ~num_replicas
+      ~timeout_ms:effective_timeout
+  in
+  Lwt.return (`Reply (Resp.Integer num_acked))
 
 (* ===== Public safe entrypoints ===== *)
 
@@ -184,47 +171,42 @@ let handle_user_resp_master (db : master db) (resp_cmd : Resp.t) ~current_time
   let open Lwt.Syntax in
   match Command.parse resp_cmd with
   | Error e -> Lwt.return (Error e)
-  | Ok cmd ->
-      let* resp_opt =
-        handle_command_master db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
-      in
-      (match resp_opt, cmd with
-      | None, Command.Psync _ -> Lwt.return (Ok `Takeover)
-      | None, _ -> Lwt.return (Ok `NoReply)
-      | Some r, _ -> Lwt.return (Ok (`Reply r)))
+  | Ok cmd -> (
+      match cmd with
+      | Command.Psync _ ->
+          let* step = handle_psync db ~ic ~oc ~address in
+          Lwt.return (Ok step)
+      | Command.Wait { num_replicas; timeout_ms } ->
+          let* step = handle_wait db ~num_replicas ~timeout_ms in
+          Lwt.return (Ok step)
+      | Command.Replconf _ ->
+          Lwt.return (Ok (`Reply (Resp.SimpleString "OK")))
+      | _ -> (
+          match User_command.of_command_for_user cmd with
+          | `Read read_cmd ->
+              let response = execute_read db read_cmd ~current_time in
+              Lwt.return (Ok (`Reply response))
+          | `Write write_cmd ->
+              let response = execute_write db write_cmd ~current_time in
+              let* () =
+                if should_propagate write_cmd then
+                  let* () = Lwt_io.eprintlf "Propagating command to replicas" in
+                  Replica_manager.propagate_to_replicas (replicas db) ~command:resp_cmd
+                else Lwt.return_unit
+              in
+              Lwt.return (Ok (`Reply response))
+          | `Disallowed ->
+              Lwt.return (Error `UnknownCommand)))
 
 let handle_user_resp_replica (db : replica db) (resp_cmd : Resp.t) ~current_time
     (conn : Peer_conn.user Peer_conn.t) =
-  let ic = Peer_conn.ic conn in
-  let oc = Peer_conn.oc conn in
-  let address = Peer_conn.addr conn in
-  let open Lwt.Syntax in
+  let _ = conn in
   match User_command.parse_for_replica resp_cmd with
   | Ok read_cmd ->
-      let cmd = User_command.to_command read_cmd in
-      let* resp_opt =
-        handle_command_replica db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
-      in
-      (match resp_opt with
-      | None -> Lwt.return (Ok `NoReply)
-      | Some r -> Lwt.return (Ok (`Reply r)))
+      let response = execute_read db read_cmd ~current_time in
+      Lwt.return (Ok (`Reply response))
   | Error `ReadOnlyReplica -> Lwt.return (Error `ReadOnlyReplica)
   | Error (#Command.error as e) -> Lwt.return (Error e)
-
-let handle_replication_resp (db : replica db) (resp_cmd : Resp.t) ~current_time
-    (_conn : Peer_conn.upstream_master Peer_conn.t) =
-  match Command.parse resp_cmd with
-  | Error e -> Lwt.return (Error e)
-  | Ok cmd -> (
-      match cmd with
-      | Command.Set _params ->
-          let _resp = execute_replica db cmd ~current_time in
-          Lwt.return (Ok None)
-      | Command.Replconf Command.ReplconfGetAck ->
-          let resp = execute_replica db cmd ~current_time in
-          Lwt.return (Ok (Some resp))
-      | Command.Ping -> Lwt.return (Ok None)
-      | _ -> Lwt.return (Error `DisallowedFromMaster))
 
 (* Increment replication offset (replica-only) *)
 let increment_offset (db : replica db) (bytes : int) : unit =

@@ -4,7 +4,7 @@ open Lwt.Syntax
 type handler_step = [ `Continue | `Takeover ]
 
 (* Callback types *)
-type command_handler = Resp.t -> Lwt_io.input_channel -> Lwt_io.output_channel -> string -> handler_step Lwt.t
+type command_handler = Resp.t -> Peer_conn.user Peer_conn.t -> handler_step Lwt.t
 
 (* Handle a client connection *)
 let handle_connection ~client_addr ~channels:(ic, oc)
@@ -19,11 +19,13 @@ let handle_connection ~client_addr ~channels:(ic, oc)
   (* Buffer reader for incomplete messages with DOS protection *)
   let reader = Buffer_reader.create ~max_size:(Some Constants.protocol_max_buffer) () in
 
+  let conn = Peer_conn.user ~ic ~oc ~addr:addr_str in
+
   let rec drain_buffer () =
     match Buffer_reader.parse_next reader ~parser:Resp.parse with
     | None -> Lwt.return `Continue
     | Some cmd ->
-        let* step = command_handler cmd ic oc addr_str in
+        let* step = command_handler cmd conn in
         (match step with
         | `Continue -> drain_buffer ()
         | `Takeover -> Lwt.return `Takeover)

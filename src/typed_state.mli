@@ -25,24 +25,34 @@ type incomplete
 
 type complete
 
-(** Role-indexed state carried by the database. *)
-type _ role_state =
-  | Master_state : { replicas : Replica_manager.t } -> master role_state
-  | Replica_state : { mutable offset : int } -> replica role_state
+(** Role-indexed database wrapper (opaque).
 
-(** Role-indexed database wrapper.
-
-    Note: this will progressively replace [Database.t]. For now we keep the same
-    underlying data sources (Storage/Config/Replica_manager).
+    This is kept abstract to prevent callers from forging roles/states.
 *)
-type 'r database = {
-  storage : Storage.t;
-  config : Config.t;
-  role : 'r role_state;
-}
+type 'r database
 
 (** Existential wrapper for runtime role selection (Config decides role). *)
-type any_database = AnyDb : 'r database -> any_database
+type any_database
+
+(** Smart constructors (used by [Database.create]). *)
+val make_master : storage:Storage.t -> config:Config.t -> master database
+val make_replica : storage:Storage.t -> config:Config.t -> replica database
+val any_of_master : master database -> any_database
+val any_of_replica : replica database -> any_database
+
+(** Safe eliminator for [any_database] without exposing constructors. *)
+val fold_any : any_database -> master:(master database -> 'a) -> replica:(replica database -> 'a) -> 'a
+
+(** Basic accessors. *)
+val storage : 'r database -> Storage.t
+val config : 'r database -> Config.t
+
+(** Master-only accessors. *)
+val replicas : master database -> Replica_manager.t
+
+(** Replica-only accessors. *)
+val replica_offset : replica database -> int
+val set_replica_offset : replica database -> int -> unit
 
 (** A connection value, indexed by role and lifecycle state. *)
 type (_, _) conn =

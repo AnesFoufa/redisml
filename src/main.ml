@@ -27,11 +27,12 @@ let error_to_string (err : [< Command.error | Config.error | Rdb.error]) : strin
   | `IoError msg -> Printf.sprintf "I/O error: %s" msg
 
 (* Handle a single command - delegates to Database module *)
-let handle_command resp_cmd ic oc addr =
+let handle_command resp_cmd (conn : Peer_conn.user Peer_conn.t) =
   let open Lwt.Syntax in
+  let oc = Peer_conn.oc conn in
   let current_time = Unix.gettimeofday () in
   let* step_or_err =
-    Database.handle_user_resp !database resp_cmd ~current_time ~ic ~oc ~address:addr
+    Database.handle_user_resp !database resp_cmd ~current_time conn
   in
   match step_or_err with
   | Ok (`Reply resp) ->

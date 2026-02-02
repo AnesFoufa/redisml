@@ -45,9 +45,7 @@ val handle_user_resp :
   t ->
   Resp.t ->
   current_time:float ->
-  ic:Lwt_io.input_channel ->
-  oc:Lwt_io.output_channel ->
-  address:string ->
+  Peer_conn.user Peer_conn.t ->
   (user_step, User_command.parse_error) result Lwt.t
 
 (** Handle a RESP value received from the upstream master.
@@ -61,8 +59,7 @@ val handle_replication_resp :
   replica db ->
   Resp.t ->
   current_time:float ->
-  ic:Lwt_io.input_channel ->
-  oc:Lwt_io.output_channel ->
+  Peer_conn.upstream_master Peer_conn.t ->
   (Resp.t option, [ Command.error | `DisallowedFromMaster ]) result Lwt.t
 
 (** Increment replication offset (replica-only). *)

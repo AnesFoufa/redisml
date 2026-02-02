@@ -114,7 +114,9 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   in
 
   (* Helper: Process commands already in buffer *)
-  let process_buffered_commands reader ic oc =
+  let upstream_conn = Peer_conn.upstream_master ~ic ~oc in
+
+  let process_buffered_commands reader =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun resp_cmd ->
       (* Extra safety: only accept a small subset of upstream-master stream commands. *)
       match Repl_command.parse resp_cmd with
@@ -122,7 +124,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
       | Ok _repl_cmd ->
           let current_time = Unix.gettimeofday () in
           let* result =
-            Database.handle_replication_resp database resp_cmd ~current_time ~ic ~oc
+            Database.handle_replication_resp database resp_cmd ~current_time upstream_conn
           in
           (match result with
           | Ok resp_opt ->
@@ -164,7 +166,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
       Lwt.catch
         (fun () ->
           (* Process any commands already in buffer *)
-          let* () = process_buffered_commands reader ic oc in
+          let* () = process_buffered_commands reader in
 
           (* Read more data from master *)
           let* result = Buffer_reader.read_from_channel reader ic ~count:4096 in

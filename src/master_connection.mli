@@ -2,7 +2,7 @@
 
 (* Connect to master server, perform handshake, and start processing commands *)
 val connect_to_master :
-  database:Database.t ->
+  database:Database.replica Database.db ->
   host:string ->
   master_port:int ->
   replica_port:int ->

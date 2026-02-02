@@ -1,7 +1,10 @@
 open Lwt.Syntax
 
+open Typed_state
+
 (* Connect to master and perform handshake *)
 let connect_to_master ~database ~host ~master_port ~replica_port =
+  let database_t : Database.t = AnyDb database in
   let* () = Lwt_io.eprintlf "Connecting to master at %s:%d" host master_port in
 
   (* Resolve hostname to IP address *)
@@ -114,13 +117,13 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   in
 
   (* Helper: Process commands already in buffer *)
-  let process_buffered_commands reader database ic oc =
+  let process_buffered_commands reader ic oc =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun cmd ->
       match Command.parse cmd with
       | Ok parsed_cmd ->
           let current_time = Unix.gettimeofday () in
           let* response_opt =
-            Database.handle_command database parsed_cmd
+            Database.handle_command database_t parsed_cmd
               ~current_time
               ~original_resp:cmd
               ~ic
@@ -170,7 +173,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
       Lwt.catch
         (fun () ->
           (* Process any commands already in buffer *)
-          let* () = process_buffered_commands reader database ic oc in
+          let* () = process_buffered_commands reader ic oc in
 
           (* Read more data from master *)
           let* result = Buffer_reader.read_from_channel reader ic ~count:4096 in

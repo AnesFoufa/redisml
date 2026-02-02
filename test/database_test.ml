@@ -105,10 +105,11 @@ let test_replconf_getack_on_replica () =
 (* Offset Tracking Tests *)
 let test_increment_offset () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
+  let t = Database.create config in
+  let db = Database.as_replica_exn t in
   Database.increment_offset db 100;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Database.execute_command cmd t ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset incremented" "100" offset
@@ -116,11 +117,12 @@ let test_increment_offset () =
 
 let test_increment_offset_multiple_times () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
+  let t = Database.create config in
+  let db = Database.as_replica_exn t in
   Database.increment_offset db 50;
   Database.increment_offset db 75;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Database.execute_command cmd t ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset accumulated" "125" offset
@@ -128,36 +130,34 @@ let test_increment_offset_multiple_times () =
 
 (* Command Propagation Tests *)
 let test_should_propagate_set_on_master () =
-  let db = Database.create Config.default in
+  let t = Database.create Config.default in
+  let master_db = Database.as_master_exn t in
   let cmd = Command.Set {
     key = "key";
     value = Resp.BulkString "val";
     expiry_ms = None
   } in
   check bool "SET should propagate on master"
-    true (Database.should_propagate_command db cmd)
+    true (Database.should_propagate_command master_db cmd)
 
-let test_should_not_propagate_set_on_replica () =
+let test_replica_has_no_master_propagation_logic () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
-  let cmd = Command.Set {
-    key = "key";
-    value = Resp.BulkString "val";
-    expiry_ms = None
-  } in
-  check bool "SET should not propagate on replica"
-    false (Database.should_propagate_command db cmd)
+  let t = Database.create config in
+  check bool "replica cannot be treated as master"
+    true (Option.is_none (Database.as_master t))
 
 let test_should_not_propagate_get () =
-  let db = Database.create Config.default in
+  let t = Database.create Config.default in
+  let master_db = Database.as_master_exn t in
   let cmd = Command.Get "key" in
   check bool "GET should not propagate"
-    false (Database.should_propagate_command db cmd)
+    false (Database.should_propagate_command master_db cmd)
 
 let test_should_not_propagate_ping () =
-  let db = Database.create Config.default in
+  let t = Database.create Config.default in
+  let master_db = Database.as_master_exn t in
   check bool "PING should not propagate"
-    false (Database.should_propagate_command db Command.Ping)
+    false (Database.should_propagate_command master_db Command.Ping)
 
 (* PSYNC Tests *)
 let test_psync_response () =
@@ -258,7 +258,7 @@ let () =
     ];
     "propagation", [
       test_case "propagate SET on master" `Quick test_should_propagate_set_on_master;
-      test_case "no propagate SET on replica" `Quick test_should_not_propagate_set_on_replica;
+      test_case "replica cannot be treated as master" `Quick test_replica_has_no_master_propagation_logic;
       test_case "no propagate GET" `Quick test_should_not_propagate_get;
       test_case "no propagate PING" `Quick test_should_not_propagate_ping;
     ];

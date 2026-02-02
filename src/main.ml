@@ -56,8 +56,9 @@ let start_server () =
   let* () =
     match config.Config.replicaof with
     | Some (host, master_port) ->
+        let replica_db = Database.as_replica_exn !database in
         Master_connection.connect_to_master
-          ~database:!database
+          ~database:replica_db
           ~host
           ~master_port
           ~replica_port:config.Config.port

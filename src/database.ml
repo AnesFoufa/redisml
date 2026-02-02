@@ -169,34 +169,30 @@ let handle_user_resp_master (db : master db) (resp_cmd : Resp.t) ~current_time
   let oc = Peer_conn.oc conn in
   let address = Peer_conn.addr conn in
   let open Lwt.Syntax in
-  match Command.parse resp_cmd with
+  match Master_command.parse resp_cmd with
   | Error e -> Lwt.return (Error e)
-  | Ok cmd -> (
+  | Ok (Master_command.Packed cmd) -> (
       match cmd with
-      | Command.Psync _ ->
+      | Master_command.Psync _params ->
           let* step = handle_psync db ~ic ~oc ~address in
           Lwt.return (Ok step)
-      | Command.Wait { num_replicas; timeout_ms } ->
+      | Master_command.Wait { num_replicas; timeout_ms } ->
           let* step = handle_wait db ~num_replicas ~timeout_ms in
           Lwt.return (Ok step)
-      | Command.Replconf _ ->
+      | Master_command.Replconf _ ->
           Lwt.return (Ok (`Reply (Resp.SimpleString "OK")))
-      | _ -> (
-          match User_command.of_command_for_user cmd with
-          | `Read read_cmd ->
-              let response = execute_read db read_cmd ~current_time in
-              Lwt.return (Ok (`Reply response))
-          | `Write write_cmd ->
-              let response = execute_write db write_cmd ~current_time in
-              let* () =
-                if should_propagate write_cmd then
-                  let* () = Lwt_io.eprintlf "Propagating command to replicas" in
-                  Replica_manager.propagate_to_replicas (replicas db) ~command:resp_cmd
-                else Lwt.return_unit
-              in
-              Lwt.return (Ok (`Reply response))
-          | `Disallowed ->
-              Lwt.return (Error `UnknownCommand)))
+      | Master_command.Read read_cmd ->
+          let response = execute_read db read_cmd ~current_time in
+          Lwt.return (Ok (`Reply response))
+      | Master_command.Write write_cmd ->
+          let response = execute_write db write_cmd ~current_time in
+          let* () =
+            if should_propagate write_cmd then
+              let* () = Lwt_io.eprintlf "Propagating command to replicas" in
+              Replica_manager.propagate_to_replicas (replicas db) ~command:resp_cmd
+            else Lwt.return_unit
+          in
+          Lwt.return (Ok (`Reply response)))
 
 let handle_user_resp_replica (db : replica db) (resp_cmd : Resp.t) ~current_time
     (conn : Peer_conn.user Peer_conn.t) =

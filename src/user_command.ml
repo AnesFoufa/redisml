@@ -16,15 +16,7 @@ type parse_error =
   | `ReadOnlyReplica
   ]
 
-let to_command : type a. a t -> Command.t = function
-  | Ping -> Command.Ping
-  | Echo msg -> Command.Echo msg
-  | Get key -> Command.Get key
-  | InfoReplication -> Command.InfoReplication
-  | ConfigGet p -> Command.ConfigGet p
-  | Keys pat -> Command.Keys pat
-  | Set params -> Command.Set params
-
+(* Internal helper to classify already-parsed commands *)
 let of_command_for_user (cmd : Command.t) :
     [ `Read of read t | `Write of write t | `Disallowed ] =
   match cmd with
@@ -39,9 +31,8 @@ let of_command_for_user (cmd : Command.t) :
   | Command.Psync _
   | Command.Replconf _ -> `Disallowed
 
-type parsed_for_master = [ `Read of read t | `Write of write t | `Disallowed ]
-
-let parse_for_master (resp : Resp.t) : (parsed_for_master, parse_error) result =
+let parse_for_master (resp : Resp.t) :
+    ([ `Read of read t | `Write of write t | `Disallowed ], parse_error) result =
   match Command.parse resp with
   | Error e -> Error e
   | Ok cmd -> (

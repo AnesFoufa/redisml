@@ -42,6 +42,23 @@ val handle_command :
   address:string ->
   Resp.t option Lwt.t
 
+(** A user-level step requested by the database layer. *)
+type user_step = [ `Reply of Resp.t | `NoReply | `Takeover ]
+
+(** Handle a RESP command received from a user connection, enforcing role policy
+    (master: allow; replica: READONLY for writes).
+
+    Returns either a step, or a parse/policy error that the caller can format.
+*)
+val handle_user_resp :
+  t ->
+  Resp.t ->
+  current_time:float ->
+  ic:Lwt_io.input_channel ->
+  oc:Lwt_io.output_channel ->
+  address:string ->
+  (user_step, User_command.parse_error) result Lwt.t
+
 (** Increment replication offset (replica-only). *)
 val increment_offset : replica db -> int -> unit
 

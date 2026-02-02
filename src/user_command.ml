@@ -25,7 +25,8 @@ let to_command : type a. a t -> Command.t = function
   | Keys pat -> Command.Keys pat
   | Set params -> Command.Set params
 
-let of_command_for_user (cmd : Command.t) : [ `Read of read t | `Write ] =
+let of_command_for_user (cmd : Command.t) :
+    [ `Read of read t | `Write of write t | `Disallowed ] =
   match cmd with
   | Command.Ping -> `Read Ping
   | Command.Echo msg -> `Read (Echo msg)
@@ -33,20 +34,21 @@ let of_command_for_user (cmd : Command.t) : [ `Read of read t | `Write ] =
   | Command.InfoReplication -> `Read InfoReplication
   | Command.ConfigGet p -> `Read (ConfigGet p)
   | Command.Keys pat -> `Read (Keys pat)
-  | Command.Set _params -> `Write
-  (* Everything else is not considered a user command in our model for now.
-     Treat it as write-ish / disallowed on replicas. *)
+  | Command.Set params -> `Write (Set params)
   | Command.Wait _
   | Command.Psync _
-  | Command.Replconf _ -> `Write
+  | Command.Replconf _ -> `Disallowed
 
-let parse_for_master (resp : Resp.t) : (read t, parse_error) result =
+type parsed_for_master = [ `Read of read t | `Write of write t | `Disallowed ]
+
+let parse_for_master (resp : Resp.t) : (parsed_for_master, parse_error) result =
   match Command.parse resp with
   | Error e -> Error e
   | Ok cmd -> (
       match of_command_for_user cmd with
-      | `Read r -> Ok r
-      | `Write -> Error `ReadOnlyReplica)
+      | `Read r -> Ok (`Read r)
+      | `Write w -> Ok (`Write w)
+      | `Disallowed -> Ok `Disallowed)
 
 let parse_for_replica (resp : Resp.t) : (read t, parse_error) result =
   match Command.parse resp with
@@ -54,4 +56,5 @@ let parse_for_replica (resp : Resp.t) : (read t, parse_error) result =
   | Ok cmd -> (
       match of_command_for_user cmd with
       | `Read r -> Ok r
-      | `Write -> Error `ReadOnlyReplica)
+      | `Write _w -> Error `ReadOnlyReplica
+      | `Disallowed -> Error `ReadOnlyReplica)

@@ -167,9 +167,7 @@ let handle_command (t : t) cmd ~current_time ~original_resp ~ic ~oc ~address =
       | Command.Wait { num_replicas; timeout_ms } -> (
           match db.role with
           | Master_state { replicas } ->
-              let effective_timeout =
-                max timeout_ms Constants.min_wait_timeout_ms
-              in
+              let effective_timeout = max timeout_ms Constants.min_wait_timeout_ms in
               let* num_acked =
                 Replica_manager.wait_for_replicas replicas ~num_replicas
                   ~timeout_ms:effective_timeout
@@ -193,6 +191,38 @@ let handle_command (t : t) cmd ~current_time ~original_resp ~ic ~oc ~address =
           in
 
           Lwt.return_some response)
+
+type user_step = [ `Reply of Resp.t | `NoReply | `Takeover ]
+
+let handle_user_resp (t : t) (resp_cmd : Resp.t) ~current_time ~ic ~oc ~address =
+  let open Lwt.Syntax in
+  match t with
+  | AnyDb db -> (
+      match db.role with
+      | Master_state _ -> (
+          (* For now, masters accept full Command.t parsing/handling. *)
+          match Command.parse resp_cmd with
+          | Error e -> Lwt.return (Error e)
+          | Ok cmd ->
+              let* resp_opt =
+                handle_command t cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
+              in
+              (match resp_opt, cmd with
+              | None, Command.Psync _ -> Lwt.return (Ok `Takeover)
+              | None, _ -> Lwt.return (Ok `NoReply)
+              | Some r, _ -> Lwt.return (Ok (`Reply r))))
+      | Replica_state _ -> (
+          match User_command.parse_for_replica resp_cmd with
+          | Ok read_cmd ->
+              let cmd = User_command.to_command read_cmd in
+              let* resp_opt =
+                handle_command t cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
+              in
+              (match resp_opt with
+              | None -> Lwt.return (Ok `NoReply)
+              | Some r -> Lwt.return (Ok (`Reply r)))
+          | Error `ReadOnlyReplica -> Lwt.return (Error `ReadOnlyReplica)
+          | Error (#Command.error as e) -> Lwt.return (Error e)))
 
 (* Increment replication offset (replica-only) *)
 let increment_offset (db : replica db) (bytes : int) : unit =

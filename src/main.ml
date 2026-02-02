@@ -29,63 +29,29 @@ let error_to_string (err : [< Command.error | Config.error | Rdb.error]) : strin
 (* Handle a single command - delegates to Database module *)
 let handle_command resp_cmd ic oc addr =
   let open Lwt.Syntax in
-  match !database with
-  | Typed_state.AnyDb db -> (
-      match db.role with
-      | Typed_state.Master_state _ -> (
-          (* Master: accept user reads/writes (for now we reuse existing Database handler). *)
-          match Command.parse resp_cmd with
-          | Ok cmd ->
-              let current_time = Unix.gettimeofday () in
-              let* response_opt =
-                Database.handle_command !database cmd ~current_time ~original_resp:resp_cmd ~ic ~oc
-                  ~address:addr
-              in
-              (match response_opt, cmd with
-              | None, Command.Psync _ ->
-                  (* PSYNC completed - pause protocol handler to avoid reading ACK responses *)
-                  raise Protocol.Replication_takeover
-              | Some resp, _ ->
-                  let* () = Lwt_io.write oc (Resp.serialize resp) in
-                  Lwt_io.flush oc
-              | None, _ -> Lwt.return_unit)
-          | Error err ->
-              let error_msg = error_to_string err in
-              let* () =
-                Lwt_io.write oc
-                  (Resp.serialize (Resp.SimpleError ("ERR " ^ error_msg)))
-              in
-              Lwt_io.flush oc)
-      | Typed_state.Replica_state _ -> (
-          (* Replica: behave like real Redis — serve reads, reject writes. *)
-          match User_command.parse_for_replica resp_cmd with
-          | Ok read_cmd ->
-              let cmd = User_command.to_command read_cmd in
-              let current_time = Unix.gettimeofday () in
-              let* response_opt =
-                Database.handle_command !database cmd ~current_time ~original_resp:resp_cmd ~ic ~oc
-                  ~address:addr
-              in
-              (match response_opt with
-              | Some resp ->
-                  let* () = Lwt_io.write oc (Resp.serialize resp) in
-                  Lwt_io.flush oc
-              | None -> Lwt.return_unit)
-          | Error `ReadOnlyReplica ->
-              let* () =
-                Lwt_io.write oc
-                  (Resp.serialize
-                     (Resp.SimpleError
-                        "READONLY You can't write against a read only replica."))
-              in
-              Lwt_io.flush oc
-          | Error (#Command.error as err) ->
-              let error_msg = error_to_string err in
-              let* () =
-                Lwt_io.write oc
-                  (Resp.serialize (Resp.SimpleError ("ERR " ^ error_msg)))
-              in
-              Lwt_io.flush oc))
+  let current_time = Unix.gettimeofday () in
+  let* step_or_err =
+    Database.handle_user_resp !database resp_cmd ~current_time ~ic ~oc ~address:addr
+  in
+  match step_or_err with
+  | Ok (`Reply resp) ->
+      let* () = Lwt_io.write oc (Resp.serialize resp) in
+      Lwt_io.flush oc
+  | Ok `NoReply -> Lwt.return_unit
+  | Ok `Takeover -> raise Protocol.Replication_takeover
+  | Error `ReadOnlyReplica ->
+      let* () =
+        Lwt_io.write oc
+          (Resp.serialize
+             (Resp.SimpleError "READONLY You can't write against a read only replica."))
+      in
+      Lwt_io.flush oc
+  | Error (#Command.error as err) ->
+      let error_msg = error_to_string err in
+      let* () =
+        Lwt_io.write oc (Resp.serialize (Resp.SimpleError ("ERR " ^ error_msg)))
+      in
+      Lwt_io.flush oc
 
 (* Start the server *)
 let start_server () =

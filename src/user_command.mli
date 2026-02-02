@@ -29,11 +29,12 @@ type parse_error =
   | `ReadOnlyReplica  (** write attempted on a read-only replica *)
   ]
 
-val parse_for_master : Resp.t -> (read t, parse_error) result
+type parsed_for_master = [ `Read of read t | `Write of write t | `Disallowed ]
+
+val parse_for_master : Resp.t -> (parsed_for_master, parse_error) result
 (** Parse a user command for a master.
 
-    Note: for now this only returns the [read] subset; writes are represented
-    separately so callers can decide how to execute them.
+    Commands that are not part of the user-command subset return [`Disallowed].
 *)
 
 val parse_for_replica : Resp.t -> (read t, parse_error) result

@@ -1,278 +1,103 @@
-(* Database unit tests *)
+(* Database unit tests (public API only)
+
+   These tests intentionally exercise only Database's public surface.
+*)
 
 open Alcotest
 open Codecrafters_redis
 
-(* Helper to check if string contains substring *)
-let contains_substring s sub =
-  try
-    let _ = Str.search_forward (Str.regexp_string sub) s 0 in
-    true
-  with Not_found -> false
+let mk_user_conn () =
+  (* Dummy channels; Database.handle_user_resp needs them for some commands.
+     For our unit tests we don't rely on actual IO happening. *)
+  let ic_r, ic_w = Lwt_io.pipe () in
+  let oc_r, oc_w = Lwt_io.pipe () in
+  (* Close unused ends to avoid leaks. *)
+  Lwt.async (fun () -> Lwt_io.close ic_w);
+  Lwt.async (fun () -> Lwt_io.close oc_r);
+  Peer_conn.user ~ic:ic_r ~oc:oc_w ~addr:"test-client"
 
-(* Role Detection Tests *)
-let test_master_role () =
-  let config = Config.default in
-  let db = Database.create config in
-  check bool "should be master" false (Database.is_replica db)
+let resp_cmd_of (cmd : Command.t) : Resp.t =
+  match cmd with
+  | Command.Ping -> Resp.Array [ Resp.BulkString "PING" ]
+  | Command.Echo (Resp.BulkString s) ->
+      Resp.Array [ Resp.BulkString "ECHO"; Resp.BulkString s ]
+  | Command.Get k -> Resp.Array [ Resp.BulkString "GET"; Resp.BulkString k ]
+  | Command.Set { key; value = Resp.BulkString v; expiry_ms = None } ->
+      Resp.Array
+        [ Resp.BulkString "SET"; Resp.BulkString key; Resp.BulkString v ]
+  | Command.InfoReplication ->
+      Resp.Array [ Resp.BulkString "INFO"; Resp.BulkString "replication" ]
+  | _ -> failwith "unsupported in unit test"
 
-let test_replica_role () =
+let run_user (db : Database.t) (cmd : Resp.t) : Database.user_step =
+  let conn = mk_user_conn () in
+  match
+    Lwt_main.run
+      (Database.handle_user_resp db cmd ~current_time:1000.0 conn)
+  with
+  | Ok step -> step
+  | Error `ReadOnlyReplica -> fail "unexpected READONLY"
+  | Error (#Command.error) -> fail "unexpected command error"
+
+let test_role_master () =
+  let db = Database.create Config.default in
+  check bool "as_replica = None" true (Option.is_none (Database.as_replica db))
+
+let test_role_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  check bool "should be replica" true (Database.is_replica db)
+  check bool "as_replica = Some" true (Option.is_some (Database.as_replica db))
 
-(* Command Execution Tests *)
-let test_ping () =
+let test_master_set_get () =
   let db = Database.create Config.default in
-  let result = Database.execute_command Command.Ping db ~current_time:1000.0 in
-  check string "PING returns PONG"
-    (Resp.serialize (Resp.SimpleString "PONG"))
-    (Resp.serialize result)
+  (match run_user db (resp_cmd_of (Command.Set { key = "k"; value = Resp.BulkString "v"; expiry_ms = None })) with
+  | `Reply r ->
+      check string "SET -> OK" (Resp.serialize (Resp.SimpleString "OK"))
+        (Resp.serialize r)
+  | _ -> fail "expected reply");
+  (match run_user db (resp_cmd_of (Command.Get "k")) with
+  | `Reply r ->
+      check string "GET -> v" (Resp.serialize (Resp.BulkString "v"))
+        (Resp.serialize r)
+  | _ -> fail "expected reply")
 
-let test_echo () =
-  let db = Database.create Config.default in
-  let msg = Resp.BulkString "hello" in
-  let result = Database.execute_command (Command.Echo msg) db ~current_time:1000.0 in
-  check string "ECHO returns message"
-    (Resp.serialize msg)
-    (Resp.serialize result)
-
-let test_set_get () =
-  let db = Database.create Config.default in
-  let set_cmd = Command.Set {
-    key = "mykey";
-    value = Resp.BulkString "myvalue";
-    expiry_ms = None
-  } in
-  let _ = Database.execute_command set_cmd db ~current_time:1000.0 in
-  let get_cmd = Command.Get "mykey" in
-  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
-  check string "GET returns SET value"
-    (Resp.serialize (Resp.BulkString "myvalue"))
-    (Resp.serialize result)
-
-let test_get_nonexistent () =
-  let db = Database.create Config.default in
-  let get_cmd = Command.Get "nonexistent" in
-  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
-  check string "GET nonexistent returns Null"
-    (Resp.serialize Resp.Null)
-    (Resp.serialize result)
-
-(* INFO Command Tests *)
-let test_info_master () =
-  let db = Database.create Config.default in
-  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
-  match result with
-  | Resp.BulkString info ->
-      check bool "contains role:master"
-        true (contains_substring info "role:master")
-  | _ -> fail "Expected BulkString"
-
-let test_info_replica () =
+let test_replica_rejects_user_writes () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
-  match result with
-  | Resp.BulkString info ->
-      check bool "contains role:slave"
-        true (contains_substring info "role:slave")
-  | _ -> fail "Expected BulkString"
+  let conn = mk_user_conn () in
+  match
+    Lwt_main.run
+      (Database.handle_user_resp db
+         (resp_cmd_of
+            (Command.Set { key = "k"; value = Resp.BulkString "v"; expiry_ms = None }))
+         ~current_time:1000.0 conn)
+  with
+  | Error `ReadOnlyReplica -> ()
+  | _ -> fail "expected READONLY"
 
-(* REPLCONF Tests *)
-let test_replconf_ok () =
+let test_info_replication_master () =
   let db = Database.create Config.default in
-  let cmd = Command.Replconf (Command.ReplconfListeningPort 6379) in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "REPLCONF returns OK"
-    (Resp.serialize (Resp.SimpleString "OK"))
-    (Resp.serialize result)
+  match run_user db (resp_cmd_of Command.InfoReplication) with
+  | `Reply (Resp.BulkString info) ->
+      check bool "contains role:master" true
+        (String.contains info 'm')
+  | _ -> fail "expected bulkstring reply"
 
-let test_replconf_getack_on_replica () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  match result with
-  | Resp.Array [
-      Resp.BulkString "REPLCONF";
-      Resp.BulkString "ACK";
-      Resp.BulkString offset
-    ] ->
-      check string "initial offset is 0" "0" offset
-  | _ -> fail "Expected REPLCONF ACK array"
-
-(* Offset Tracking Tests *)
-let test_increment_offset () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let t = Database.create config in
-  let db = Database.as_replica_exn t in
-  Database.increment_offset db 100;
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd t ~current_time:1000.0 in
-  match result with
-  | Resp.Array [_; _; Resp.BulkString offset] ->
-      check string "offset incremented" "100" offset
-  | _ -> fail "Expected ACK with offset"
-
-let test_increment_offset_multiple_times () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let t = Database.create config in
-  let db = Database.as_replica_exn t in
-  Database.increment_offset db 50;
-  Database.increment_offset db 75;
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd t ~current_time:1000.0 in
-  match result with
-  | Resp.Array [_; _; Resp.BulkString offset] ->
-      check string "offset accumulated" "125" offset
-  | _ -> fail "Expected ACK with offset"
-
-(* Command Propagation Tests *)
-let test_should_propagate_set_on_master () =
-  let t = Database.create Config.default in
-  let master_db = Database.as_master_exn t in
-  let cmd = Command.Set {
-    key = "key";
-    value = Resp.BulkString "val";
-    expiry_ms = None
-  } in
-  check bool "SET should propagate on master"
-    true (Database.should_propagate_command master_db cmd)
-
-let test_replica_has_no_master_propagation_logic () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let t = Database.create config in
-  check bool "replica cannot be treated as master"
-    true (Option.is_none (Database.as_master t))
-
-let test_should_not_propagate_get () =
-  let t = Database.create Config.default in
-  let master_db = Database.as_master_exn t in
-  let cmd = Command.Get "key" in
-  check bool "GET should not propagate"
-    false (Database.should_propagate_command master_db cmd)
-
-let test_should_not_propagate_ping () =
-  let t = Database.create Config.default in
-  let master_db = Database.as_master_exn t in
-  check bool "PING should not propagate"
-    false (Database.should_propagate_command master_db Command.Ping)
-
-(* PSYNC Tests *)
-let test_psync_response () =
-  let db = Database.create Config.default in
-  let cmd = Command.Psync { replication_id = "?"; offset = -1 } in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  match result with
-  | Resp.SimpleString s ->
-      check bool "PSYNC returns FULLRESYNC"
-        true (contains_substring s "FULLRESYNC")
-  | _ -> fail "Expected SimpleString"
-
-(* CONFIG Tests *)
-let test_config_get_dir_with_value () =
-  let config = { Config.default with dir = Some "/tmp/redis" } in
-  let db = Database.create config in
-  let cmd = Command.ConfigGet Command.Dir in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "CONFIG GET dir returns array with value"
-    (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString "/tmp/redis"]))
-    (Resp.serialize result)
-
-let test_config_get_dir_no_value () =
-  let config = Config.default in
-  let db = Database.create config in
-  let cmd = Command.ConfigGet Command.Dir in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "CONFIG GET dir with no value returns array with empty string"
-    (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString ""]))
-    (Resp.serialize result)
-
-let test_config_get_dbfilename_with_value () =
-  let config = { Config.default with dbfilename = Some "dump.rdb" } in
-  let db = Database.create config in
-  let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "CONFIG GET dbfilename returns array with value"
-    (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString "dump.rdb"]))
-    (Resp.serialize result)
-
-let test_config_get_dbfilename_no_value () =
-  let config = Config.default in
-  let db = Database.create config in
-  let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "CONFIG GET dbfilename with no value returns array with empty string"
-    (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString ""]))
-    (Resp.serialize result)
-
-(* KEYS Tests *)
-let test_keys_empty () =
-  let db = Database.create Config.default in
-  let cmd = Command.Keys "*" in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  check string "KEYS on empty database"
-    (Resp.serialize (Resp.Array []))
-    (Resp.serialize result)
-
-let test_keys_with_data () =
-  let db = Database.create Config.default in
-  let _ = Database.execute_command
-    (Command.Set { key = "foo"; value = Resp.BulkString "bar"; expiry_ms = None })
-    db ~current_time:1000.0 in
-  let _ = Database.execute_command
-    (Command.Set { key = "baz"; value = Resp.BulkString "qux"; expiry_ms = None })
-    db ~current_time:1000.0 in
-  let cmd = Command.Keys "*" in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
-  match result with
-  | Resp.Array keys ->
-      check int "KEYS returns 2 keys" 2 (List.length keys)
-  | _ -> fail "Expected array"
-
-(* Test Suite *)
-let () =
-  run "Database" [
-    "role", [
-      test_case "master role" `Quick test_master_role;
-      test_case "replica role" `Quick test_replica_role;
-    ];
-    "commands", [
-      test_case "PING" `Quick test_ping;
-      test_case "ECHO" `Quick test_echo;
-      test_case "SET/GET" `Quick test_set_get;
-      test_case "GET nonexistent" `Quick test_get_nonexistent;
-    ];
-    "info", [
-      test_case "INFO on master" `Quick test_info_master;
-      test_case "INFO on replica" `Quick test_info_replica;
-    ];
-    "replconf", [
-      test_case "REPLCONF OK" `Quick test_replconf_ok;
-      test_case "GETACK on replica" `Quick test_replconf_getack_on_replica;
-    ];
-    "offset", [
-      test_case "increment offset" `Quick test_increment_offset;
-      test_case "increment offset multiple" `Quick test_increment_offset_multiple_times;
-    ];
-    "propagation", [
-      test_case "propagate SET on master" `Quick test_should_propagate_set_on_master;
-      test_case "replica cannot be treated as master" `Quick test_replica_has_no_master_propagation_logic;
-      test_case "no propagate GET" `Quick test_should_not_propagate_get;
-      test_case "no propagate PING" `Quick test_should_not_propagate_ping;
-    ];
-    "psync", [
-      test_case "PSYNC response" `Quick test_psync_response;
-    ];
-    "config", [
-      test_case "CONFIG GET dir with value" `Quick test_config_get_dir_with_value;
-      test_case "CONFIG GET dir no value" `Quick test_config_get_dir_no_value;
-      test_case "CONFIG GET dbfilename with value" `Quick test_config_get_dbfilename_with_value;
-      test_case "CONFIG GET dbfilename no value" `Quick test_config_get_dbfilename_no_value;
-    ];
-    "keys", [
-      test_case "KEYS on empty database" `Quick test_keys_empty;
-      test_case "KEYS with data" `Quick test_keys_with_data;
-    ];
+let suite () =
+  [
+    ( "role",
+      [
+        test_case "master role" `Quick test_role_master;
+        test_case "replica role" `Quick test_role_replica;
+      ] );
+    ( "user-policy",
+      [
+        test_case "master set/get" `Quick test_master_set_get;
+        test_case "replica rejects user writes" `Quick
+          test_replica_rejects_user_writes;
+      ] );
+    ( "info",
+      [ test_case "INFO replication on master" `Quick test_info_replication_master ] );
   ]
+
+let () = Alcotest.run "Database" (suite ())

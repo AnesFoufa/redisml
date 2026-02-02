@@ -26,36 +26,45 @@ let error_to_string (err : [< Command.error | Config.error | Rdb.error]) : strin
   | `UnsupportedValueType typ -> Printf.sprintf "unsupported value type: %d" typ
   | `IoError msg -> Printf.sprintf "I/O error: %s" msg
 
+(* Helper to send error response *)
+let send_error oc msg =
+  let open Lwt.Syntax in
+  let* () = Lwt_io.write oc (Resp.serialize (Resp.SimpleError msg)) in
+  Lwt_io.flush oc
+
 (* Handle a single command - delegates to Database module *)
 let handle_command resp_cmd (conn : Peer_conn.user Peer_conn.t) =
   let open Lwt.Syntax in
   let oc = Peer_conn.oc conn in
   let current_time = Unix.gettimeofday () in
-  let* step_or_err =
-    Database.handle_user_resp !database resp_cmd ~current_time conn
-  in
-  match step_or_err with
-  | Ok (`Reply resp) ->
-      let* () = Lwt_io.write oc (Resp.serialize resp) in
-      let* () = Lwt_io.flush oc in
-      Lwt.return `Continue
-  | Ok `NoReply -> Lwt.return `Continue
-  | Ok `Takeover -> Lwt.return `Takeover
-  | Error `ReadOnlyReplica ->
-      let* () =
-        Lwt_io.write oc
-          (Resp.serialize
-             (Resp.SimpleError "READONLY You can't write against a read only replica."))
-      in
-      let* () = Lwt_io.flush oc in
-      Lwt.return `Continue
-  | Error (#Command.error as err) ->
-      let error_msg = error_to_string err in
-      let* () =
-        Lwt_io.write oc (Resp.serialize (Resp.SimpleError ("ERR " ^ error_msg)))
-      in
-      let* () = Lwt_io.flush oc in
-      Lwt.return `Continue
+  match !database with
+  | Database.Master db ->
+      let* result = Database.handle_user_resp_master db resp_cmd ~current_time conn in
+      (match result with
+      | Ok (`Reply resp) ->
+          let* () = Lwt_io.write oc (Resp.serialize resp) in
+          let* () = Lwt_io.flush oc in
+          Lwt.return `Continue
+      | Ok `NoReply -> Lwt.return `Continue
+      | Ok `Takeover -> Lwt.return `Takeover
+      | Error (#Command.error as err) ->
+          let* () = send_error oc ("ERR " ^ error_to_string err) in
+          Lwt.return `Continue)
+  | Database.Replica db ->
+      let* result = Database.handle_user_resp_replica db resp_cmd ~current_time conn in
+      (match result with
+      | Ok (`Reply resp) ->
+          let* () = Lwt_io.write oc (Resp.serialize resp) in
+          let* () = Lwt_io.flush oc in
+          Lwt.return `Continue
+      | Ok `NoReply -> Lwt.return `Continue
+      | Ok `Takeover -> Lwt.return `Takeover
+      | Error `ReadOnlyReplica ->
+          let* () = send_error oc "READONLY You can't write against a read only replica." in
+          Lwt.return `Continue
+      | Error (#Command.error as err) ->
+          let* () = send_error oc ("ERR " ^ error_to_string err) in
+          Lwt.return `Continue)
 
 (* Start the server *)
 let start_server () =
@@ -64,15 +73,17 @@ let start_server () =
 
   (* If running as replica, connect to master *)
   let* () =
-    match config.Config.replicaof with
-    | Some (host, master_port) ->
-        let replica_db = Database.as_replica_exn !database in
-        Master_connection.connect_to_master
-          ~database:replica_db
-          ~host
-          ~master_port
-          ~replica_port:config.Config.port
-    | None -> Lwt.return_unit
+    match !database with
+    | Database.Replica replica_db ->
+        (match config.Config.replicaof with
+        | Some (host, master_port) ->
+            Master_connection.connect_to_master
+              ~database:replica_db
+              ~host
+              ~master_port
+              ~replica_port:config.Config.port
+        | None -> Lwt.return_unit)
+    | Database.Master _ -> Lwt.return_unit
   in
 
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in

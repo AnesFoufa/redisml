@@ -7,10 +7,10 @@ type replica = Typed_state.replica
 
 type 'r db = 'r Typed_state.database
 
-type t = Typed_state.any_database
+type server = Master of master db | Replica of replica db
 
 (* Create a new database with the given configuration *)
-let create (config : Config.t) : t =
+let create (config : Config.t) : server =
   let storage = Storage.create () in
 
   (* Load RDB file if configured *)
@@ -28,28 +28,14 @@ let create (config : Config.t) : t =
   | _ -> ());
 
   if Config.is_replica config then
-    any_of_replica (make_replica ~storage ~config)
+    Replica (make_replica ~storage ~config)
   else
-    any_of_master (make_master ~storage ~config)
+    Master (make_master ~storage ~config)
 
-let get_config (t : t) : Config.t =
-  fold_any t ~master:config ~replica:config
-
-let as_master (t : t) : master db option =
-  fold_any t ~master:(fun db -> Some db) ~replica:(fun _ -> None)
-
-let as_replica (t : t) : replica db option =
-  fold_any t ~master:(fun _ -> None) ~replica:(fun db -> Some db)
-
-let as_master_exn t =
-  match as_master t with
-  | Some db -> db
-  | None -> failwith "Expected master database"
-
-let as_replica_exn t =
-  match as_replica t with
-  | Some db -> db
-  | None -> failwith "Expected replica database"
+let get_config (server : server) : Config.t =
+  match server with
+  | Master db -> config db
+  | Replica db -> config db
 
 (* ===== Pure execution (role-aware) ===== *)
 
@@ -186,51 +172,44 @@ let handle_command_replica (db : replica db) cmd ~current_time ~original_resp ~i
   let _ = ic and _ = oc in
   Lwt.return_some response
 
-(* Keep the fully-generic handler internal for now, but mark it unused to satisfy
-   strict warning settings. *)
-let _handle_command (t : t) cmd ~current_time ~original_resp ~ic ~oc ~address =
-  fold_any t
-    ~master:(fun db ->
-      handle_command_master db cmd ~current_time ~original_resp ~ic ~oc ~address)
-    ~replica:(fun db ->
-      handle_command_replica db cmd ~current_time ~original_resp ~ic ~oc ~address)
-
 (* ===== Public safe entrypoints ===== *)
 
 type user_step = [ `Reply of Resp.t | `NoReply | `Takeover ]
 
-let handle_user_resp (t : t) (resp_cmd : Resp.t) ~current_time (conn : Peer_conn.user Peer_conn.t) =
+let handle_user_resp_master (db : master db) (resp_cmd : Resp.t) ~current_time
+    (conn : Peer_conn.user Peer_conn.t) =
   let ic = Peer_conn.ic conn in
   let oc = Peer_conn.oc conn in
   let address = Peer_conn.addr conn in
   let open Lwt.Syntax in
-  fold_any t
-    ~master:(fun db ->
-      match Command.parse resp_cmd with
-      | Error e -> Lwt.return (Error e)
-      | Ok cmd ->
-          let* resp_opt =
-            handle_command_master db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc
-              ~address
-          in
-          (match resp_opt, cmd with
-          | None, Command.Psync _ -> Lwt.return (Ok `Takeover)
-          | None, _ -> Lwt.return (Ok `NoReply)
-          | Some r, _ -> Lwt.return (Ok (`Reply r)))
-    )
-    ~replica:(fun db ->
-      match User_command.parse_for_replica resp_cmd with
-      | Ok read_cmd ->
-          let cmd = User_command.to_command read_cmd in
-          let* resp_opt =
-            handle_command_replica db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc
-              ~address
-          in
-          (match resp_opt with
-          | None -> Lwt.return (Ok `NoReply)
-          | Some r -> Lwt.return (Ok (`Reply r)))
-      | Error `ReadOnlyReplica -> Lwt.return (Error `ReadOnlyReplica)
-      | Error (#Command.error as e) -> Lwt.return (Error e))
+  match Command.parse resp_cmd with
+  | Error e -> Lwt.return (Error e)
+  | Ok cmd ->
+      let* resp_opt =
+        handle_command_master db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
+      in
+      (match resp_opt, cmd with
+      | None, Command.Psync _ -> Lwt.return (Ok `Takeover)
+      | None, _ -> Lwt.return (Ok `NoReply)
+      | Some r, _ -> Lwt.return (Ok (`Reply r)))
+
+let handle_user_resp_replica (db : replica db) (resp_cmd : Resp.t) ~current_time
+    (conn : Peer_conn.user Peer_conn.t) =
+  let ic = Peer_conn.ic conn in
+  let oc = Peer_conn.oc conn in
+  let address = Peer_conn.addr conn in
+  let open Lwt.Syntax in
+  match User_command.parse_for_replica resp_cmd with
+  | Ok read_cmd ->
+      let cmd = User_command.to_command read_cmd in
+      let* resp_opt =
+        handle_command_replica db cmd ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
+      in
+      (match resp_opt with
+      | None -> Lwt.return (Ok `NoReply)
+      | Some r -> Lwt.return (Ok (`Reply r)))
+  | Error `ReadOnlyReplica -> Lwt.return (Error `ReadOnlyReplica)
+  | Error (#Command.error as e) -> Lwt.return (Error e)
 
 let handle_replication_resp (db : replica db) (resp_cmd : Resp.t) ~current_time
     (_conn : Peer_conn.upstream_master Peer_conn.t) =

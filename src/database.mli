@@ -8,41 +8,34 @@ type replica = Typed_state.replica
 (** Role-indexed database. *)
 type 'r db = 'r Typed_state.database
 
-(** Existential database (role chosen from config at runtime). *)
-type t = Typed_state.any_database
+(** Runtime-selected server (role chosen from config at startup). *)
+type server = Master of master db | Replica of replica db
 
 (** Create a new database with the given configuration. *)
-val create : Config.t -> t
+val create : Config.t -> server
 
 (** Get the current configuration. *)
-val get_config : t -> Config.t
-
-(** Narrowing helpers.
-
-    These are the only remaining runtime checks around roles; they should only be
-    used at the edges where role is chosen from Config.
-*)
-val as_master : t -> master db option
-val as_replica : t -> replica db option
-val as_master_exn : t -> master db
-val as_replica_exn : t -> replica db
-
-(** Internal command executor is intentionally not exposed in the public .mli.
-
-    Use {!handle_user_resp} (user connections) or {!handle_replication_resp}
-    (upstream master stream).
-*)
+val get_config : server -> Config.t
 
 (** A user-level step requested by the database layer. *)
 type user_step = [ `Reply of Resp.t | `NoReply | `Takeover ]
 
-(** Handle a RESP command received from a user connection, enforcing role policy
-    (master: allow; replica: READONLY for writes).
+(** Handle a RESP command received from a user connection.
 
-    Returns either a step, or a parse/policy error that the caller can format.
+    Exposed as two entrypoints to keep role constraints type-safe:
+
+    - Master: can accept replication takeover (PSYNC)
+    - Replica: enforces READONLY for writes
 *)
-val handle_user_resp :
-  t ->
+val handle_user_resp_master :
+  master db ->
+  Resp.t ->
+  current_time:float ->
+  Peer_conn.user Peer_conn.t ->
+  (user_step, Command.error) result Lwt.t
+
+val handle_user_resp_replica :
+  replica db ->
   Resp.t ->
   current_time:float ->
   Peer_conn.user Peer_conn.t ->

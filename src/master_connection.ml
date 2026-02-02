@@ -1,10 +1,7 @@
 open Lwt.Syntax
 
-open Typed_state
-
 (* Connect to master and perform handshake *)
 let connect_to_master ~database ~host ~master_port ~replica_port =
-  let database_t : Database.t = AnyDb database in
   let* () = Lwt_io.eprintlf "Connecting to master at %s:%d" host master_port in
 
   (* Resolve hostname to IP address *)
@@ -119,29 +116,24 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
   (* Helper: Process commands already in buffer *)
   let process_buffered_commands reader ic oc =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun resp_cmd ->
+      (* Extra safety: only accept a small subset of upstream-master stream commands. *)
       match Repl_command.parse resp_cmd with
       | Error _ -> Lwt.return_unit
-      | Ok repl_cmd -> (
-          match Repl_command.to_command repl_cmd with
-          | None -> Lwt.return_unit
-          | Some cmd ->
-              let current_time = Unix.gettimeofday () in
-              let* response_opt =
-                Database.handle_command database_t cmd ~current_time ~original_resp:resp_cmd
-                  ~ic ~oc ~address:"master"
-              in
+      | Ok _repl_cmd ->
+          let current_time = Unix.gettimeofday () in
+          let* result =
+            Database.handle_replication_resp database resp_cmd ~current_time ~ic ~oc
+          in
+          (match result with
+          | Ok resp_opt ->
               let cmd_bytes = String.length (Resp.serialize resp_cmd) in
               Database.increment_offset database cmd_bytes;
-
-              (* Only REPLCONF GETACK expects a reply (ACK). *)
-              (match repl_cmd with
-              | Repl_command.Replconf_getack -> (
-                  match response_opt with
-                  | Some resp ->
-                      let* () = Lwt_io.write oc (Resp.serialize resp) in
-                      Lwt_io.flush oc
-                  | None -> Lwt.return_unit)
-              | Repl_command.Apply_set _ | Repl_command.Ignore -> Lwt.return_unit)))
+              (match resp_opt with
+              | None -> Lwt.return_unit
+              | Some resp ->
+                  let* () = Lwt_io.write oc (Resp.serialize resp) in
+                  Lwt_io.flush oc)
+          | Error _ -> Lwt.return_unit))
   in
 
   (* Spawn background task to handle replication stream *)

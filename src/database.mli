@@ -27,20 +27,11 @@ val as_replica : t -> replica db option
 val as_master_exn : t -> master db
 val as_replica_exn : t -> replica db
 
-(** Handle a command and return optional response.
+(** Internal command executor is intentionally not exposed in the public .mli.
 
-    Note: even though [t] is existential, internally this function immediately
-    dispatches to role-indexed logic.
+    Use {!handle_user_resp} (user connections) or {!handle_replication_resp}
+    (upstream master stream).
 *)
-val handle_command :
-  t ->
-  Command.t ->
-  current_time:float ->
-  original_resp:Resp.t ->
-  ic:Lwt_io.input_channel ->
-  oc:Lwt_io.output_channel ->
-  address:string ->
-  Resp.t option Lwt.t
 
 (** A user-level step requested by the database layer. *)
 type user_step = [ `Reply of Resp.t | `NoReply | `Takeover ]
@@ -59,10 +50,20 @@ val handle_user_resp :
   address:string ->
   (user_step, User_command.parse_error) result Lwt.t
 
+(** Handle a RESP value received from the upstream master.
+
+    This is *replication-stream* traffic, not user traffic.
+
+    Returns [Ok (Some resp)] when we must reply to upstream (e.g. ACK), [Ok None]
+    for one-way stream commands, or [Error _] for malformed/disallowed input.
+*)
+val handle_replication_resp :
+  replica db ->
+  Resp.t ->
+  current_time:float ->
+  ic:Lwt_io.input_channel ->
+  oc:Lwt_io.output_channel ->
+  (Resp.t option, [ Command.error | `DisallowedFromMaster ]) result Lwt.t
+
 (** Increment replication offset (replica-only). *)
 val increment_offset : replica db -> int -> unit
-
-(* For testing only *)
-val execute_command : Command.t -> t -> current_time:float -> Resp.t
-val should_propagate_command : master db -> Command.t -> bool
-val is_replica : t -> bool

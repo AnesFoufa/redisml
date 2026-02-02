@@ -43,7 +43,7 @@ let create (config : Config.t) : t =
 
 let get_config (AnyDb db) = db.config
 
-let is_replica (AnyDb db) =
+let _is_replica (AnyDb db) =
   match db.role with
   | Replica_state _ -> true
   | Master_state _ -> false
@@ -223,6 +223,32 @@ let handle_user_resp (t : t) (resp_cmd : Resp.t) ~current_time ~ic ~oc ~address 
               | Some r -> Lwt.return (Ok (`Reply r)))
           | Error `ReadOnlyReplica -> Lwt.return (Error `ReadOnlyReplica)
           | Error (#Command.error as e) -> Lwt.return (Error e)))
+
+(* Handle a RESP value received from the upstream master (replication stream). *)
+let handle_replication_resp (db : replica db) (resp_cmd : Resp.t) ~current_time ~ic ~oc =
+  match Command.parse resp_cmd with
+  | Error e -> Lwt.return (Error e)
+  | Ok cmd -> (
+      match cmd with
+      | Command.Set _params ->
+          (* Apply replicated writes to local storage. *)
+          let t : t = AnyDb db in
+          let _resp = execute_command cmd t ~current_time in
+          let _ = ic and _ = oc in
+          Lwt.return (Ok None)
+      | Command.Replconf Command.ReplconfGetAck ->
+          (* Reply with ACK <offset>. *)
+          let t : t = AnyDb db in
+          let resp = execute_command cmd t ~current_time in
+          let _ = ic and _ = oc in
+          Lwt.return (Ok (Some resp))
+      | Command.Ping ->
+          (* Ignore pings in stream. *)
+          let _ = ic and _ = oc in
+          Lwt.return (Ok None)
+      | _ ->
+          let _ = ic and _ = oc in
+          Lwt.return (Error `DisallowedFromMaster))
 
 (* Increment replication offset (replica-only) *)
 let increment_offset (db : replica db) (bytes : int) : unit =

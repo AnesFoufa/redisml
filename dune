@@ -4,7 +4,7 @@
  (name codecrafters_redis)
  (libraries unix lwt lwt.unix)
  (preprocess (pps lwt_ppx))
- (modules :standard \ main))
+ (modules :standard \ main \ user_command \ repl_command))
 
 (executable
  (name main)

@@ -1,8 +1,8 @@
 open Lwt.Syntax
 open Codecrafters_redis
 
-(* Global database state - stores dynamic db variant *)
-let database : Database.db ref = ref (Database.create Config.default)
+(* Global database state - stores running db variant (master or connected replica) *)
+let database : Database.db option ref = ref None
 
 (* Centralized error handler - converts any module error to string *)
 let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
@@ -36,12 +36,14 @@ let handle_command resp_cmd ic oc addr =
       let current_time = Unix.gettimeofday () in
       (* Pattern match on database role to call appropriate handler *)
       let* response_opt = match !database with
-        | Database.Master master_db ->
+        | Some (Database.Master master_db) ->
             Database.handle_master_command master_db cmd ~current_time
               ~original_resp:resp_cmd ~ic ~oc ~address:addr
-        | Database.Replica replica_db ->
+        | Some (Database.Replica replica_db) ->
             Database.handle_replica_command replica_db cmd ~current_time
               ~original_resp:resp_cmd ~ic ~oc ~address:addr
+        | None ->
+            Lwt.return_some (Resp.SimpleError "ERR database not initialized")
       in
       match (response_opt, cmd) with
       | None, Command.Psync _ ->
@@ -62,23 +64,12 @@ let handle_command resp_cmd ic oc addr =
 (* Start the server *)
 let start_server () =
   let config = match !database with
-    | Database.Master db -> Database.get_config db
-    | Database.Replica db -> Database.get_config db
+    | Some (Database.Master db) -> Database.get_config db
+    | Some (Database.Replica db) -> Database.get_config db
+    | None -> failwith "Database not initialized"
   in
   let* () =
     Lwt_io.eprintlf "Starting Redis server on port %d" config.Config.port
-  in
-
-  (* If running as replica, connect to master *)
-  let* () =
-    match !database with
-    | Database.Replica replica_db ->
-        (match config.Config.replicaof with
-         | Some (host, master_port) ->
-             Master_connection.connect_to_master ~database:replica_db ~host
-               ~master_port ~replica_port:config.Config.port
-         | None -> Lwt.return_unit)
-    | Database.Master _ -> Lwt.return_unit
   in
 
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in
@@ -92,11 +83,14 @@ let start_server () =
 (* Main entry point *)
 let () =
   let parsed_config = Config.parse_args_or_default Sys.argv in
-  database := Database.create parsed_config;
+  let created_db = Database.create parsed_config in
 
   Lwt_main.run
     (Lwt.catch
        (fun () ->
+         (* Initialize database - connects replica to master if needed *)
+         let* db = Database.initialize created_db in
+         database := Some db;
          let* _server = start_server () in
          (* Wait forever *)
          let forever, _ = Lwt.wait () in

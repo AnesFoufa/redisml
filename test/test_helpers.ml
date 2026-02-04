@@ -1,6 +1,15 @@
 (* Test helpers for database testing *)
 open Lwt.Syntax
 
+let initialize_db created_db =
+  Lwt_main.run (
+    Codecrafters_redis.Database.initialize created_db
+  )
+
+let create_db config =
+  Unix.putenv "CODECRAFTERS_REDIS_SKIP_REPLICA_CONNECT" "1";
+  initialize_db (Codecrafters_redis.Database.create config)
+
 (* Create mock Lwt channels that discard output *)
 let create_mock_channels () =
   let (ic_dummy, oc_dummy) = Lwt_io.pipe () in

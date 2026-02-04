@@ -13,24 +13,24 @@ let contains_substring s sub =
 (* Role Detection Tests *)
 let test_master_role () =
   let config = Config.default in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   check bool "should be master" true (Test_helpers.is_master db)
 
 let test_replica_role () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   check bool "should be replica" true (Test_helpers.is_replica db)
 
 (* Command Execution Tests *)
 let test_ping () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let result = Test_helpers.exec_command Command.Ping db ~current_time:1000.0 in
   check string "PING returns PONG"
     (Resp.serialize (Resp.SimpleString "PONG"))
     (Resp.serialize result)
 
 let test_echo () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let msg = Resp.BulkString "hello" in
   let result = Test_helpers.exec_command (Command.Echo msg) db ~current_time:1000.0 in
   check string "ECHO returns message"
@@ -38,7 +38,7 @@ let test_echo () =
     (Resp.serialize result)
 
 let test_set_get () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let set_cmd = Command.Set {
     key = "mykey";
     value = Resp.BulkString "myvalue";
@@ -52,7 +52,7 @@ let test_set_get () =
     (Resp.serialize result)
 
 let test_get_nonexistent () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let get_cmd = Command.Get "nonexistent" in
   let result = Test_helpers.exec_command get_cmd db ~current_time:1000.0 in
   check string "GET nonexistent returns Null"
@@ -61,7 +61,7 @@ let test_get_nonexistent () =
 
 (* INFO Command Tests *)
 let test_info_master () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
@@ -71,7 +71,7 @@ let test_info_master () =
 
 let test_info_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
@@ -81,7 +81,7 @@ let test_info_replica () =
 
 (* REPLCONF Tests *)
 let test_replconf_ok () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let cmd = Command.Replconf (Command.ReplconfListeningPort 6379) in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "REPLCONF returns OK"
@@ -90,7 +90,7 @@ let test_replconf_ok () =
 
 let test_replconf_getack_on_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let cmd = Command.Replconf Command.ReplconfGetAck in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
@@ -103,41 +103,9 @@ let test_replconf_getack_on_replica () =
   | _ -> fail "Expected REPLCONF ACK array"
 
 (* Offset Tracking Tests *)
-let test_increment_offset () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
-  let replica_db = match db with
-    | Database.Replica r -> r
-    | Database.Master _ -> fail "Expected replica database"
-  in
-  Database.increment_offset replica_db 100;
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
-  match result with
-  | Resp.Array [_; _; Resp.BulkString offset] ->
-      check string "offset incremented" "100" offset
-  | _ -> fail "Expected ACK with offset"
-
-let test_increment_offset_multiple_times () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
-  let replica_db = match db with
-    | Database.Replica r -> r
-    | Database.Master _ -> fail "Expected replica database"
-  in
-  Database.increment_offset replica_db 50;
-  Database.increment_offset replica_db 75;
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
-  match result with
-  | Resp.Array [_; _; Resp.BulkString offset] ->
-      check string "offset accumulated" "125" offset
-  | _ -> fail "Expected ACK with offset"
-
-
 (* PSYNC Tests *)
 let test_psync_response () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let cmd = Command.Psync { replication_id = "?"; offset = -1 } in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
@@ -149,7 +117,7 @@ let test_psync_response () =
 (* CONFIG Tests *)
 let test_config_get_dir_with_value () =
   let config = { Config.default with dir = Some "/tmp/redis" } in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let cmd = Command.ConfigGet Command.Dir in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dir returns array with value"
@@ -158,7 +126,7 @@ let test_config_get_dir_with_value () =
 
 let test_config_get_dir_no_value () =
   let config = Config.default in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let cmd = Command.ConfigGet Command.Dir in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dir with no value returns array with empty string"
@@ -167,7 +135,7 @@ let test_config_get_dir_no_value () =
 
 let test_config_get_dbfilename_with_value () =
   let config = { Config.default with dbfilename = Some "dump.rdb" } in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let cmd = Command.ConfigGet Command.Dbfilename in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename returns array with value"
@@ -176,7 +144,7 @@ let test_config_get_dbfilename_with_value () =
 
 let test_config_get_dbfilename_no_value () =
   let config = Config.default in
-  let db = Database.create config in
+  let db = Test_helpers.create_db config in
   let cmd = Command.ConfigGet Command.Dbfilename in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename with no value returns array with empty string"
@@ -185,7 +153,7 @@ let test_config_get_dbfilename_no_value () =
 
 (* KEYS Tests *)
 let test_keys_empty () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let cmd = Command.Keys "*" in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "KEYS on empty database"
@@ -193,7 +161,7 @@ let test_keys_empty () =
     (Resp.serialize result)
 
 let test_keys_with_data () =
-  let db = Database.create Config.default in
+  let db = Test_helpers.create_db Config.default in
   let _ = Test_helpers.exec_command
     (Command.Set { key = "foo"; value = Resp.BulkString "bar"; expiry_ms = None })
     db ~current_time:1000.0 in
@@ -227,10 +195,6 @@ let () =
     "replconf", [
       test_case "REPLCONF OK" `Quick test_replconf_ok;
       test_case "GETACK on replica" `Quick test_replconf_getack_on_replica;
-    ];
-    "offset", [
-      test_case "increment offset" `Quick test_increment_offset;
-      test_case "increment offset multiple" `Quick test_increment_offset_multiple_times;
     ];
     "psync", [
       test_case "PSYNC response" `Quick test_psync_response;

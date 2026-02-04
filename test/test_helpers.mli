@@ -7,6 +7,9 @@ val exec_command :
   current_time:float ->
   Codecrafters_redis.Resp.t
 
+(* Create and initialize a database synchronously for tests *)
+val create_db : Codecrafters_redis.Config.t -> Codecrafters_redis.Database.db
+
 (* Check if database is in replica role by examining INFO output *)
 val is_replica : Codecrafters_redis.Database.db -> bool
 

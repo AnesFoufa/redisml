@@ -106,7 +106,11 @@ let test_replconf_getack_on_replica () =
 let test_increment_offset () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  Database.increment_offset db 100;
+  let replica_db = match db with
+    | Database.Replica r -> r
+    | Database.Master _ -> fail "Expected replica database"
+  in
+  Database.increment_offset replica_db 100;
   let cmd = Command.Replconf Command.ReplconfGetAck in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
@@ -117,8 +121,12 @@ let test_increment_offset () =
 let test_increment_offset_multiple_times () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  Database.increment_offset db 50;
-  Database.increment_offset db 75;
+  let replica_db = match db with
+    | Database.Replica r -> r
+    | Database.Master _ -> fail "Expected replica database"
+  in
+  Database.increment_offset replica_db 50;
+  Database.increment_offset replica_db 75;
   let cmd = Command.Replconf Command.ReplconfGetAck in
   let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with

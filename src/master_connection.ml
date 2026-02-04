@@ -120,7 +120,7 @@ let connect_to_master ~database ~host ~master_port ~replica_port =
       | Ok parsed_cmd ->
           let current_time = Unix.gettimeofday () in
           let* response_opt =
-            Database.handle_command database parsed_cmd
+            Database.handle_replica_command database parsed_cmd
               ~current_time
               ~original_resp:cmd
               ~ic

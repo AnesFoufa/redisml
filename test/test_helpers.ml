@@ -87,12 +87,22 @@ let exec_command cmd db ~current_time =
             Codecrafters_redis.Resp.BulkString pattern
           ]
     in
-    let* result_opt = Codecrafters_redis.Database.handle_command db cmd
-      ~current_time
-      ~original_resp
-      ~ic
-      ~oc
-      ~address
+    (* Pattern match on database role to call appropriate handler *)
+    let* result_opt = match db with
+      | Codecrafters_redis.Database.Master master_db ->
+          Codecrafters_redis.Database.handle_master_command master_db cmd
+            ~current_time
+            ~original_resp
+            ~ic
+            ~oc
+            ~address
+      | Codecrafters_redis.Database.Replica replica_db ->
+          Codecrafters_redis.Database.handle_replica_command replica_db cmd
+            ~current_time
+            ~original_resp
+            ~ic
+            ~oc
+            ~address
     in
     match result_opt with
     | Some resp -> Lwt.return resp

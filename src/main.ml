@@ -1,8 +1,8 @@
 open Lwt.Syntax
 open Codecrafters_redis
 
-(* Global database state *)
-let database = ref (Database.create Config.default)
+(* Global database state - stores dynamic db variant *)
+let database : Database.db ref = ref (Database.create Config.default)
 
 (* Centralized error handler - converts any module error to string *)
 let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
@@ -34,9 +34,14 @@ let handle_command resp_cmd ic oc addr =
   match Command.parse resp_cmd with
   | Ok cmd -> (
       let current_time = Unix.gettimeofday () in
-      let* response_opt =
-        Database.handle_command !database cmd ~current_time
-          ~original_resp:resp_cmd ~ic ~oc ~address:addr
+      (* Pattern match on database role to call appropriate handler *)
+      let* response_opt = match !database with
+        | Database.Master master_db ->
+            Database.handle_master_command master_db cmd ~current_time
+              ~original_resp:resp_cmd ~ic ~oc ~address:addr
+        | Database.Replica replica_db ->
+            Database.handle_replica_command replica_db cmd ~current_time
+              ~original_resp:resp_cmd ~ic ~oc ~address:addr
       in
       match (response_opt, cmd) with
       | None, Command.Psync _ ->
@@ -56,18 +61,24 @@ let handle_command resp_cmd ic oc addr =
 
 (* Start the server *)
 let start_server () =
-  let config = Database.get_config !database in
+  let config = match !database with
+    | Database.Master db -> Database.get_config db
+    | Database.Replica db -> Database.get_config db
+  in
   let* () =
     Lwt_io.eprintlf "Starting Redis server on port %d" config.Config.port
   in
 
   (* If running as replica, connect to master *)
   let* () =
-    match config.Config.replicaof with
-    | Some (host, master_port) ->
-        Master_connection.connect_to_master ~database:!database ~host
-          ~master_port ~replica_port:config.Config.port
-    | None -> Lwt.return_unit
+    match !database with
+    | Database.Replica replica_db ->
+        (match config.Config.replicaof with
+         | Some (host, master_port) ->
+             Master_connection.connect_to_master ~database:replica_db ~host
+               ~master_port ~replica_port:config.Config.port
+         | None -> Lwt.return_unit)
+    | Database.Master _ -> Lwt.return_unit
   in
 
   let listen_addr = Unix.ADDR_INET (Unix.inet_addr_any, config.Config.port) in

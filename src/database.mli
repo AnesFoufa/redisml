@@ -11,7 +11,7 @@
  *
  * Lifecycle:
  * - create returns created_db (CreatedMaster or CreatedReplica with disconnected state)
- * - initialize connects replicas and returns db (Master or Replica with connected state)
+ * - connect_replica connects replicas and returns connected_replica t
  *
  * Benefits:
  * - Master-only operations (PSYNC, WAIT, propagation) require master t
@@ -26,24 +26,25 @@ type 'a t
 (* Phantom type markers for roles - only expose what's needed *)
 type master
 type connected_replica
+type disconnected_replica
 
 (* Result of create - only two possibilities, replica starts disconnected *)
 type created_db = private
   | CreatedMaster of master t
   | CreatedReplica of disconnected_replica t
-and disconnected_replica
-
-(* Running database - only two possibilities, replica is connected *)
-type db = Master of master t | Replica of connected_replica t
 
 (* Create a new database with the given configuration.
    Returns CreatedMaster or CreatedReplica (disconnected). *)
 val create : Config.t -> created_db
 
-(* Initialize the database - connects replica if needed. *)
-val initialize :
-  created_db ->
-  db Lwt.t
+type replica_connection_error = [ `FailedConnection ]
+
+val replica_connection_error_to_string : replica_connection_error -> string
+
+(* Connect a replica to its master. *)
+val connect_replica :
+  disconnected_replica t ->
+  (connected_replica t, [> replica_connection_error ]) result Lwt.t
 
 (* Get the current configuration from any database *)
 val get_config : 'a t -> Config.t

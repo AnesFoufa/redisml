@@ -1,8 +1,12 @@
 open Lwt.Syntax
 open Codecrafters_redis
 
+type running_db =
+  | Master of Database.master Database.t
+  | Replica of Database.connected_replica Database.t
+
 (* Global database state - stores running db variant (master or connected replica) *)
-let database : Database.db option ref = ref None
+let database : running_db option ref = ref None
 
 (* Centralized error handler - converts any module error to string *)
 let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
@@ -36,10 +40,10 @@ let handle_command resp_cmd ic oc addr =
       let current_time = Unix.gettimeofday () in
       (* Pattern match on database role to call appropriate handler *)
       let* response_opt = match !database with
-        | Some (Database.Master master_db) ->
+        | Some (Master master_db) ->
             Database.handle_master_command master_db cmd ~current_time
               ~original_resp:resp_cmd ~ic ~oc ~address:addr
-        | Some (Database.Replica replica_db) ->
+        | Some (Replica replica_db) ->
             Database.handle_replica_command replica_db cmd ~current_time
               ~original_resp:resp_cmd ~ic ~oc ~address:addr
         | None ->
@@ -64,8 +68,8 @@ let handle_command resp_cmd ic oc addr =
 (* Start the server *)
 let start_server () =
   let config = match !database with
-    | Some (Database.Master db) -> Database.get_config db
-    | Some (Database.Replica db) -> Database.get_config db
+    | Some (Master db) -> Database.get_config db
+    | Some (Replica db) -> Database.get_config db
     | None -> failwith "Database not initialized"
   in
   let* () =
@@ -89,12 +93,23 @@ let () =
     (Lwt.catch
        (fun () ->
          (* Initialize database - connects replica to master if needed *)
-         let* db = Database.initialize created_db in
-         database := Some db;
+         let* db =
+           match created_db with
+           | Database.CreatedMaster master_db ->
+               Lwt.return (Ok (Master master_db))
+           | Database.CreatedReplica replica_db ->
+               let* result = Database.connect_replica replica_db in
+               Lwt.return (Result.map (fun db -> Replica db) result)
+         in
+         (match db with
+          | Ok running_db ->
+              database := Some running_db
+          | Error `FailedConnection ->
+              failwith (Database.replica_connection_error_to_string `FailedConnection));
          let* _server = start_server () in
          (* Wait forever *)
          let forever, _ = Lwt.wait () in
-         forever)
+        forever)
        (fun exn ->
          let* () = Lwt_io.eprintlf "Fatal error: %s" (Printexc.to_string exn) in
          Lwt.return_unit))

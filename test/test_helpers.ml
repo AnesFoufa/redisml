@@ -1,14 +1,27 @@
 (* Test helpers for database testing *)
 open Lwt.Syntax
 
+type running_db =
+  | Master of Codecrafters_redis.Database.master Codecrafters_redis.Database.t
+  | Replica of
+      Codecrafters_redis.Database.connected_replica
+      Codecrafters_redis.Database.t
+
 let initialize_db created_db =
   Lwt_main.run (
-    Codecrafters_redis.Database.initialize created_db
+    match created_db with
+    | Codecrafters_redis.Database.CreatedMaster master_db ->
+        Lwt.return (Ok (Master master_db))
+    | Codecrafters_redis.Database.CreatedReplica replica_db ->
+        let* result = Codecrafters_redis.Database.connect_replica replica_db in
+        Lwt.return (Result.map (fun db -> Replica db) result)
   )
 
 let create_db config =
   Unix.putenv "CODECRAFTERS_REDIS_SKIP_REPLICA_CONNECT" "1";
-  initialize_db (Codecrafters_redis.Database.create config)
+  match initialize_db (Codecrafters_redis.Database.create config) with
+  | Ok db -> db
+  | Error `FailedConnection -> failwith "Failed to connect replica in tests"
 
 (* Create mock Lwt channels that discard output *)
 let create_mock_channels () =
@@ -98,14 +111,14 @@ let exec_command cmd db ~current_time =
     in
     (* Pattern match on database role to call appropriate handler *)
     let* result_opt = match db with
-      | Codecrafters_redis.Database.Master master_db ->
+      | Master master_db ->
           Codecrafters_redis.Database.handle_master_command master_db cmd
             ~current_time
             ~original_resp
             ~ic
             ~oc
             ~address
-      | Codecrafters_redis.Database.Replica replica_db ->
+      | Replica replica_db ->
           Codecrafters_redis.Database.handle_replica_command replica_db cmd
             ~current_time
             ~original_resp

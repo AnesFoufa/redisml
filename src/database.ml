@@ -26,8 +26,10 @@ type created_db =
   | CreatedMaster of master t
   | CreatedReplica of disconnected_replica t
 
-(* Running database - only two possibilities *)
-type db = Master of master t | Replica of connected_replica t
+type replica_connection_error = [ `FailedConnection ]
+
+let replica_connection_error_to_string = function
+  | `FailedConnection -> "failed to connect to master"
 
 let create cfg =
   let storage = Storage.create () in
@@ -61,6 +63,14 @@ let create cfg =
     }
 
 let get_config db = db.config
+
+let promote_disconnected_replica (db : disconnected_replica t) =
+  let (DisconnectedReplica state) = db.role in
+  {
+    storage = db.storage;
+    config = db.config;
+    role = ConnectedReplica state;
+  }
 
 (* Execute a command and return response - works for any role *)
 let execute_command : type a. Command.t -> a t -> current_time:float -> Resp.t =
@@ -213,12 +223,7 @@ let increment_offset db bytes =
 (* Connect to master and perform handshake *)
 let connect_to_master ~(database : disconnected_replica t) ~host ~master_port ~replica_port =
   let open Lwt.Syntax in
-  let (DisconnectedReplica state) = database.role in
-  let connected_db = {
-    storage = database.storage;
-    config = database.config;
-    role = ConnectedReplica state;
-  } in
+  let connected_db = promote_disconnected_replica database in
   match Sys.getenv_opt "CODECRAFTERS_REDIS_SKIP_REPLICA_CONNECT" with
   | Some "1" -> Lwt.return connected_db
   | _ ->
@@ -410,23 +415,18 @@ let connect_to_master ~(database : disconnected_replica t) ~host ~master_port ~r
 
   Lwt.return connected_db
 
-let initialize created_db =
+let connect_replica (db : disconnected_replica t) =
   let open Lwt.Syntax in
-  match created_db with
-  | CreatedMaster master_db ->
-      Lwt.return (Master master_db)
-  | CreatedReplica disconnected_db ->
+  Lwt.catch
+    (fun () ->
       let* connected_db =
-        match disconnected_db.config.Config.replicaof with
+        match db.config.Config.replicaof with
         | Some (host, master_port) ->
-            connect_to_master ~database:disconnected_db ~host ~master_port
-              ~replica_port:disconnected_db.config.Config.port
+            connect_to_master ~database:db ~host ~master_port
+              ~replica_port:db.config.Config.port
         | None ->
-            let (DisconnectedReplica state) = disconnected_db.role in
-            Lwt.return {
-              storage = disconnected_db.storage;
-              config = disconnected_db.config;
-              role = ConnectedReplica state;
-            }
+            Lwt.return (promote_disconnected_replica db)
       in
-      Lwt.return (Replica connected_db)
+      Lwt.return (Ok connected_db))
+    (fun _exn ->
+      Lwt.return (Error `FailedConnection))

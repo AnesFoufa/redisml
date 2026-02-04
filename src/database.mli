@@ -22,8 +22,3 @@ val handle_command :
 
 (* Increment replication offset (for tracking bytes from master) *)
 val increment_offset : t -> int -> unit
-
-(* For testing only *)
-val execute_command : Command.t -> t -> current_time:float -> Resp.t
-val should_propagate_command : t -> Command.t -> bool
-val is_replica : t -> bool

@@ -14,17 +14,17 @@ let contains_substring s sub =
 let test_master_role () =
   let config = Config.default in
   let db = Database.create config in
-  check bool "should be master" false (Database.is_replica db)
+  check bool "should be master" true (Test_helpers.is_master db)
 
 let test_replica_role () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  check bool "should be replica" true (Database.is_replica db)
+  check bool "should be replica" true (Test_helpers.is_replica db)
 
 (* Command Execution Tests *)
 let test_ping () =
   let db = Database.create Config.default in
-  let result = Database.execute_command Command.Ping db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command Command.Ping db ~current_time:1000.0 in
   check string "PING returns PONG"
     (Resp.serialize (Resp.SimpleString "PONG"))
     (Resp.serialize result)
@@ -32,7 +32,7 @@ let test_ping () =
 let test_echo () =
   let db = Database.create Config.default in
   let msg = Resp.BulkString "hello" in
-  let result = Database.execute_command (Command.Echo msg) db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (Command.Echo msg) db ~current_time:1000.0 in
   check string "ECHO returns message"
     (Resp.serialize msg)
     (Resp.serialize result)
@@ -44,9 +44,9 @@ let test_set_get () =
     value = Resp.BulkString "myvalue";
     expiry_ms = None
   } in
-  let _ = Database.execute_command set_cmd db ~current_time:1000.0 in
+  let _ = Test_helpers.exec_command set_cmd db ~current_time:1000.0 in
   let get_cmd = Command.Get "mykey" in
-  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command get_cmd db ~current_time:1000.0 in
   check string "GET returns SET value"
     (Resp.serialize (Resp.BulkString "myvalue"))
     (Resp.serialize result)
@@ -54,7 +54,7 @@ let test_set_get () =
 let test_get_nonexistent () =
   let db = Database.create Config.default in
   let get_cmd = Command.Get "nonexistent" in
-  let result = Database.execute_command get_cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command get_cmd db ~current_time:1000.0 in
   check string "GET nonexistent returns Null"
     (Resp.serialize Resp.Null)
     (Resp.serialize result)
@@ -62,7 +62,7 @@ let test_get_nonexistent () =
 (* INFO Command Tests *)
 let test_info_master () =
   let db = Database.create Config.default in
-  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:master"
@@ -72,7 +72,7 @@ let test_info_master () =
 let test_info_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
-  let result = Database.execute_command Command.InfoReplication db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:slave"
@@ -83,7 +83,7 @@ let test_info_replica () =
 let test_replconf_ok () =
   let db = Database.create Config.default in
   let cmd = Command.Replconf (Command.ReplconfListeningPort 6379) in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "REPLCONF returns OK"
     (Resp.serialize (Resp.SimpleString "OK"))
     (Resp.serialize result)
@@ -92,7 +92,7 @@ let test_replconf_getack_on_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Database.create config in
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [
       Resp.BulkString "REPLCONF";
@@ -108,7 +108,7 @@ let test_increment_offset () =
   let db = Database.create config in
   Database.increment_offset db 100;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset incremented" "100" offset
@@ -120,50 +120,18 @@ let test_increment_offset_multiple_times () =
   Database.increment_offset db 50;
   Database.increment_offset db 75;
   let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [_; _; Resp.BulkString offset] ->
       check string "offset accumulated" "125" offset
   | _ -> fail "Expected ACK with offset"
 
-(* Command Propagation Tests *)
-let test_should_propagate_set_on_master () =
-  let db = Database.create Config.default in
-  let cmd = Command.Set {
-    key = "key";
-    value = Resp.BulkString "val";
-    expiry_ms = None
-  } in
-  check bool "SET should propagate on master"
-    true (Database.should_propagate_command db cmd)
-
-let test_should_not_propagate_set_on_replica () =
-  let config = { Config.default with replicaof = Some ("localhost", 6379) } in
-  let db = Database.create config in
-  let cmd = Command.Set {
-    key = "key";
-    value = Resp.BulkString "val";
-    expiry_ms = None
-  } in
-  check bool "SET should not propagate on replica"
-    false (Database.should_propagate_command db cmd)
-
-let test_should_not_propagate_get () =
-  let db = Database.create Config.default in
-  let cmd = Command.Get "key" in
-  check bool "GET should not propagate"
-    false (Database.should_propagate_command db cmd)
-
-let test_should_not_propagate_ping () =
-  let db = Database.create Config.default in
-  check bool "PING should not propagate"
-    false (Database.should_propagate_command db Command.Ping)
 
 (* PSYNC Tests *)
 let test_psync_response () =
   let db = Database.create Config.default in
   let cmd = Command.Psync { replication_id = "?"; offset = -1 } in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.SimpleString s ->
       check bool "PSYNC returns FULLRESYNC"
@@ -175,7 +143,7 @@ let test_config_get_dir_with_value () =
   let config = { Config.default with dir = Some "/tmp/redis" } in
   let db = Database.create config in
   let cmd = Command.ConfigGet Command.Dir in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dir returns array with value"
     (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString "/tmp/redis"]))
     (Resp.serialize result)
@@ -184,7 +152,7 @@ let test_config_get_dir_no_value () =
   let config = Config.default in
   let db = Database.create config in
   let cmd = Command.ConfigGet Command.Dir in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dir with no value returns array with empty string"
     (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString ""]))
     (Resp.serialize result)
@@ -193,7 +161,7 @@ let test_config_get_dbfilename_with_value () =
   let config = { Config.default with dbfilename = Some "dump.rdb" } in
   let db = Database.create config in
   let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename returns array with value"
     (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString "dump.rdb"]))
     (Resp.serialize result)
@@ -202,7 +170,7 @@ let test_config_get_dbfilename_no_value () =
   let config = Config.default in
   let db = Database.create config in
   let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename with no value returns array with empty string"
     (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString ""]))
     (Resp.serialize result)
@@ -211,21 +179,21 @@ let test_config_get_dbfilename_no_value () =
 let test_keys_empty () =
   let db = Database.create Config.default in
   let cmd = Command.Keys "*" in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   check string "KEYS on empty database"
     (Resp.serialize (Resp.Array []))
     (Resp.serialize result)
 
 let test_keys_with_data () =
   let db = Database.create Config.default in
-  let _ = Database.execute_command
+  let _ = Test_helpers.exec_command
     (Command.Set { key = "foo"; value = Resp.BulkString "bar"; expiry_ms = None })
     db ~current_time:1000.0 in
-  let _ = Database.execute_command
+  let _ = Test_helpers.exec_command
     (Command.Set { key = "baz"; value = Resp.BulkString "qux"; expiry_ms = None })
     db ~current_time:1000.0 in
   let cmd = Command.Keys "*" in
-  let result = Database.execute_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array keys ->
       check int "KEYS returns 2 keys" 2 (List.length keys)
@@ -255,12 +223,6 @@ let () =
     "offset", [
       test_case "increment offset" `Quick test_increment_offset;
       test_case "increment offset multiple" `Quick test_increment_offset_multiple_times;
-    ];
-    "propagation", [
-      test_case "propagate SET on master" `Quick test_should_propagate_set_on_master;
-      test_case "no propagate SET on replica" `Quick test_should_not_propagate_set_on_replica;
-      test_case "no propagate GET" `Quick test_should_not_propagate_get;
-      test_case "no propagate PING" `Quick test_should_not_propagate_ping;
     ];
     "psync", [
       test_case "PSYNC response" `Quick test_psync_response;

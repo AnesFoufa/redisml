@@ -2,8 +2,8 @@
 
 (executable
  (name database_test)
- (libraries codecrafters_redis alcotest str)
- (modules database_test)
+ (libraries codecrafters_redis alcotest str lwt lwt.unix)
+ (modules test_helpers database_test)
  (optional))
 
 (rule

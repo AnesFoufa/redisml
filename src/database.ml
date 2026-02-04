@@ -43,11 +43,6 @@ let create config =
 
 let get_config db = db.config
 
-let is_replica db =
-  match db.role with
-  | Replica _ -> true
-  | Master _ -> false
-
 (* Execute a command and return response *)
 let execute_command cmd db ~current_time =
   let storage = db.storage in

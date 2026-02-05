@@ -9,28 +9,12 @@ type t
 *)
 val create : ?max_size:int option -> ?initial_capacity:int -> unit -> t
 
-(** Get current buffer size in bytes *)
-val size : t -> int
-
-(** Check if adding data of given length would exceed max size *)
-val would_exceed_max : t -> int -> bool
-
-(** Add data to buffer
-    @return Ok () if successful, Error `BufferOverflow if max size exceeded
-*)
-val add_data : t -> string -> (unit, [> `BufferOverflow]) result
-
 (** Get current buffer contents *)
 val contents : t -> string
 
 (** Reset buffer and optionally add remaining data *)
 val reset : t -> string option -> unit
 
-(** Try to parse next value from buffer using provided parser
-    @param parser Function that parses string into (value, remaining) option
-    @return Some value if parse succeeds, None if incomplete
-*)
-val parse_next : t -> parser:(string -> ('a * string) option) -> 'a option
 
 (** Read data from channel and add to buffer
     @return `Ok if data read successfully, `Eof if channel closed, `BufferOverflow if max size exceeded

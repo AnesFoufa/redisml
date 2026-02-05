@@ -157,6 +157,11 @@ let should_propagate_command cmd =
   | Command.Set _ -> true
   | _ -> false
 
+type command_result =
+  | Respond of Resp.t
+  | Silent
+  | ConnectionTakenOver
+
 (* Handle command on master database *)
 let handle_master_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
   let open Lwt.Syntax in
@@ -180,14 +185,14 @@ let handle_master_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
       (* Register replica for command propagation *)
       let* () = Replica_manager.register_replica replica_manager ~ic ~oc ~address in
 
-      Lwt.return_none  (* Response already sent, connection will be taken over *)
+      Lwt.return ConnectionTakenOver
 
   | Command.Wait { num_replicas; timeout_ms } ->
       (* WAIT: Send GETACK to replicas and wait for responses *)
       (* Use a longer timeout if the provided one is small to account for multiple replicas *)
       let effective_timeout = max timeout_ms Constants.min_wait_timeout_ms in
       let* num_acked = Replica_manager.wait_for_replicas replica_manager ~num_replicas ~timeout_ms:effective_timeout in
-      Lwt.return_some (Resp.Integer num_acked)
+      Lwt.return (Respond (Resp.Integer num_acked))
 
   | _ ->
       (* Normal command: execute and return response *)
@@ -201,19 +206,17 @@ let handle_master_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
           Lwt.return_unit
       in
 
-      Lwt.return_some response
+      Lwt.return (Respond response)
 
 (* Handle command on connected replica database *)
-let handle_replica_command db cmd ~current_time ~original_resp:_ ~ic:_ ~oc:_ ~address:_ =
+let handle_replica_command db cmd ~current_time =
   match cmd with
   | Command.Psync _ ->
-      Lwt.return_some (Resp.SimpleError "ERR PSYNC not allowed on replica")
+      Lwt.return (Resp.SimpleError "ERR PSYNC not allowed on replica")
   | Command.Wait _ ->
-      Lwt.return_some (Resp.SimpleError "ERR WAIT not allowed on replica")
+      Lwt.return (Resp.SimpleError "ERR WAIT not allowed on replica")
   | _ ->
-      (* Normal command: just execute and return *)
-      let response = execute_command cmd db ~current_time in
-      Lwt.return_some response
+      Lwt.return (execute_command cmd db ~current_time)
 
 (* Increment replication offset - connected replica only *)
 let increment_offset db bytes =
@@ -339,29 +342,21 @@ let connect_to_master ~(database : disconnected_replica t) ~host ~master_port ~r
   in
 
   (* Helper: Process commands already in buffer *)
-  let process_buffered_commands reader ic oc =
+  let process_buffered_commands reader _ic oc =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun cmd ->
       match Command.parse cmd with
       | Ok parsed_cmd ->
           let current_time = Unix.gettimeofday () in
-          let* response_opt =
-            handle_replica_command connected_db parsed_cmd
-              ~current_time
-              ~original_resp:cmd
-              ~ic
-              ~oc
-              ~address:"master"
+          let* resp =
+            handle_replica_command connected_db parsed_cmd ~current_time
           in
           let cmd_bytes = String.length (Resp.serialize cmd) in
           increment_offset connected_db cmd_bytes;
 
           (match parsed_cmd with
            | Command.Replconf _ ->
-               (match response_opt with
-                | Some resp ->
-                    let* () = Lwt_io.write oc (Resp.serialize resp) in
-                    Lwt_io.flush oc
-                | None -> Lwt.return_unit)
+               let* () = Lwt_io.write oc (Resp.serialize resp) in
+               Lwt_io.flush oc
            | _ -> Lwt.return_unit)
       | Error _ -> Lwt.return_unit
     )

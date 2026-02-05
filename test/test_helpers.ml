@@ -110,35 +110,28 @@ let exec_command cmd db ~current_time =
           ]
     in
     (* Pattern match on database role to call appropriate handler *)
-    let* result_opt = match db with
-      | Master master_db ->
+    match db with
+    | Master master_db ->
+        let* result =
           Codecrafters_redis.Database.handle_master_command master_db cmd
             ~current_time
             ~original_resp
             ~ic
             ~oc
             ~address
-      | Replica replica_db ->
-          Codecrafters_redis.Database.handle_replica_command replica_db cmd
-            ~current_time
-            ~original_resp
-            ~ic
-            ~oc
-            ~address
-    in
-    match result_opt with
-    | Some resp -> Lwt.return resp
-    | None ->
-        (* For commands that write directly to the channel (like PSYNC),
-           read the response from the channel *)
-        (match cmd with
-         | Codecrafters_redis.Command.Psync _ ->
-             (* Read the FULLRESYNC response from the channel *)
+        in
+        (match result with
+         | Codecrafters_redis.Database.Respond resp -> Lwt.return resp
+         | Codecrafters_redis.Database.ConnectionTakenOver ->
              let* data = Lwt_io.read ~count:4096 ic in
              (match Codecrafters_redis.Resp.parse data with
               | Some (resp, _) -> Lwt.return resp
               | None -> Lwt.return Codecrafters_redis.Resp.Null)
-         | _ -> Lwt.return Codecrafters_redis.Resp.Null)
+         | Codecrafters_redis.Database.Silent ->
+             Lwt.return Codecrafters_redis.Resp.Null)
+    | Replica replica_db ->
+        Codecrafters_redis.Database.handle_replica_command replica_db cmd
+          ~current_time
   )
 
 (* Check if database is in replica role by examining INFO output *)

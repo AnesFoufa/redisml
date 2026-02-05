@@ -39,25 +39,23 @@ let handle_command resp_cmd ic oc addr =
   | Ok cmd -> (
       let current_time = Unix.gettimeofday () in
       (* Pattern match on database role to call appropriate handler *)
-      let* response_opt = match !database with
+      let* result = match !database with
         | Some (Master master_db) ->
             Database.handle_master_command master_db cmd ~current_time
               ~original_resp:resp_cmd ~ic ~oc ~address:addr
         | Some (Replica replica_db) ->
-            Database.handle_replica_command replica_db cmd ~current_time
-              ~original_resp:resp_cmd ~ic ~oc ~address:addr
+            let* resp = Database.handle_replica_command replica_db cmd ~current_time in
+            Lwt.return (Database.Respond resp)
         | None ->
-            Lwt.return_some (Resp.SimpleError "ERR database not initialized")
+            Lwt.return (Database.Respond (Resp.SimpleError "ERR database not initialized"))
       in
-      match (response_opt, cmd) with
-      | None, Command.Psync _ ->
-          (* PSYNC completed - pause protocol handler to avoid reading ACK responses *)
+      match result with
+      | Database.ConnectionTakenOver ->
           raise Protocol.Replication_takeover
-      | Some resp, _ ->
+      | Database.Respond resp ->
           let* () = Lwt_io.write oc (Resp.serialize resp) in
           Lwt_io.flush oc
-      | None, _ -> Lwt.return_unit
-      (* Silent - response already sent *))
+      | Database.Silent -> Lwt.return_unit)
   | Error err ->
       let error_msg = error_to_string err in
       let* () =

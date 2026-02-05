@@ -1,17 +1,57 @@
-(* Database - Encapsulates all server state *)
+(* Database - Encapsulates all server state with phantom types for role safety *)
 
-(* Opaque database type containing storage, configuration, and role-specific state *)
-type t
+(*
+ * Phantom Types for Compile-Time Role Safety
+ *
+ * The database uses phantom types to enforce role-specific operations at compile time:
+ * - 'a t: Phantom typed database where 'a is master, connected_replica, or disconnected_replica
+ * - master: Phantom type marker indicating master role
+ * - connected_replica: Phantom type marker for replica connected to master
+ * - disconnected_replica: Internal marker for replica before connection (not exposed)
+ *
+ * Lifecycle:
+ * - create returns created_db (CreatedMaster or CreatedReplica with disconnected state)
+ * - connect_replica connects replicas and returns connected_replica t
+ *
+ * Benefits:
+ * - Master-only operations (PSYNC, WAIT, propagation) require master t
+ * - Replica-only operations (GETACK) require connected_replica t
+ * - Cannot call replica operations before connection is established
+ * - Role violations caught at compile time, not runtime
+ *)
 
-(* Create a new database with the given configuration *)
-val create : Config.t -> t
+(* Phantom typed database - 'a is master, connected_replica, or disconnected_replica *)
+type 'a t
 
-(* Get the current configuration *)
-val get_config : t -> Config.t
+(* Phantom type markers for roles - only expose what's needed *)
+type master
+type connected_replica
+type disconnected_replica
 
-(* Handle a command and return optional response *)
-val handle_command :
-  t ->
+(* Result of create - only two possibilities, replica starts disconnected *)
+type created_db = private
+  | CreatedMaster of master t
+  | CreatedReplica of disconnected_replica t
+
+(* Create a new database with the given configuration.
+   Returns CreatedMaster or CreatedReplica (disconnected). *)
+val create : Config.t -> created_db
+
+type replica_connection_error = [ `FailedConnection ]
+
+val replica_connection_error_to_string : replica_connection_error -> string
+
+(* Connect a replica to its master. *)
+val connect_replica :
+  disconnected_replica t ->
+  (connected_replica t, [> replica_connection_error ]) result Lwt.t
+
+(* Get the current configuration from any database *)
+val get_config : 'a t -> Config.t
+
+(* Handle commands on a master database *)
+val handle_master_command :
+  master t ->
   Command.t ->
   current_time:float ->
   original_resp:Resp.t ->
@@ -20,10 +60,13 @@ val handle_command :
   address:string ->
   Resp.t option Lwt.t
 
-(* Increment replication offset (for tracking bytes from master) *)
-val increment_offset : t -> int -> unit
-
-(* For testing only *)
-val execute_command : Command.t -> t -> current_time:float -> Resp.t
-val should_propagate_command : t -> Command.t -> bool
-val is_replica : t -> bool
+(* Handle commands on a connected replica database *)
+val handle_replica_command :
+  connected_replica t ->
+  Command.t ->
+  current_time:float ->
+  original_resp:Resp.t ->
+  ic:Lwt_io.input_channel ->
+  oc:Lwt_io.output_channel ->
+  address:string ->
+  Resp.t option Lwt.t

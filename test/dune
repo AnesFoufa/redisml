@@ -1,0 +1,56 @@
+(include_subdirs no)
+
+(executable
+ (name database_test)
+ (libraries codecrafters_redis alcotest str lwt lwt.unix)
+ (modules test_helpers database_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps database_test.exe)
+ (action (run %{exe:database_test.exe})))
+
+(executable
+ (name storage_test)
+ (libraries codecrafters_redis alcotest)
+ (modules storage_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps storage_test.exe)
+ (action (run %{exe:storage_test.exe})))
+
+(executable
+ (name resp_test)
+ (libraries codecrafters_redis alcotest)
+ (modules resp_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps resp_test.exe)
+ (action (run %{exe:resp_test.exe})))
+
+(executable
+ (name command_test)
+ (libraries codecrafters_redis alcotest)
+ (modules command_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps command_test.exe)
+ (action (run %{exe:command_test.exe})))
+
+(executable
+ (name rdb_test)
+ (libraries codecrafters_redis alcotest)
+ (modules rdb_test)
+ (optional))
+
+(rule
+ (alias runtest)
+ (deps rdb_test.exe)
+ (action (run %{exe:rdb_test.exe})))

@@ -59,3 +59,12 @@ The codebase is organized into focused modules:
 Comprehensive unit tests (130+ tests) are maintained in the `with-tests` branch to keep the main branch focused on the implementation.
 
 To run tests: `git checkout with-tests && dune runtest`
+
+## Contributing Documentation
+
+When adding new documentation:
+1. Create markdown files in this `docs/` directory
+2. Add entry to this README with brief description
+3. Follow existing documentation structure and style
+4. Include code examples where helpful
+5. Keep documentation in sync with code changes

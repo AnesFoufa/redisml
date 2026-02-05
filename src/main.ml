@@ -5,9 +5,6 @@ type running_db =
   | Master of Database.master Database.t
   | Replica of Database.connected_replica Database.t
 
-(* Global database state - stores running db variant (master or connected replica) *)
-let database : running_db option ref = ref None
-
 (* Centralized error handler - converts any module error to string *)
 let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
     string =
@@ -33,7 +30,7 @@ let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
   | `IoError msg -> Printf.sprintf "I/O error: %s" msg
 
 (* Handle a single command - delegates to Database module *)
-let handle_command resp_cmd ic oc addr =
+let handle_command db resp_cmd ic oc addr =
   let open Lwt.Syntax in
   match Command.parse resp_cmd with
   | Ok parsed -> (
@@ -43,20 +40,18 @@ let handle_command resp_cmd ic oc addr =
           Database.handle_master_command db cmd ~current_time
             ~original_resp:resp_cmd ~ic ~oc ~address:addr
       in
-      let* result = match !database with
-        | Some (Master master_db) ->
+      let* result = match db with
+        | Master master_db ->
             (match parsed with
              | Command.Read cmd -> master_command master_db cmd
              | Command.Write cmd -> master_command master_db cmd)
-        | Some (Replica replica_db) ->
+        | Replica replica_db ->
             (match parsed with
              | Command.Read cmd ->
                  let* resp = Database.handle_replica_command replica_db cmd ~current_time in
                  Lwt.return (Database.Respond resp)
              | Command.Write _ ->
                  Lwt.return (Database.Respond (Resp.SimpleError "ERR write command not allowed on replica")))
-        | None ->
-            Lwt.return (Database.Respond (Resp.SimpleError "ERR database not initialized"))
       in
       match result with
       | Database.ConnectionTakenOver ->
@@ -73,11 +68,10 @@ let handle_command resp_cmd ic oc addr =
       Lwt_io.flush oc
 
 (* Start the server *)
-let start_server () =
-  let config = match !database with
-    | Some (Master db) -> Database.get_config db
-    | Some (Replica db) -> Database.get_config db
-    | None -> failwith "Database not initialized"
+let start_server db =
+  let config = match db with
+    | Master db -> Database.get_config db
+    | Replica db -> Database.get_config db
   in
   let* () =
     Lwt_io.eprintlf "Starting Redis server on port %d" config.Config.port
@@ -89,7 +83,7 @@ let start_server () =
   Lwt_io.establish_server_with_client_address listen_addr
     (fun client_addr (ic, oc) ->
       Protocol.handle_connection ~client_addr ~channels:(ic, oc)
-        ~command_handler:handle_command ())
+        ~command_handler:(handle_command db) ())
 
 (* Main entry point *)
 let () =
@@ -115,8 +109,7 @@ let () =
            | Error err ->
                Lwt.fail_with (Database.replica_connection_error_to_string err)
          in
-         database := Some running_db;
-         let* _server = start_server () in
+         let* _server = start_server running_db in
          (* Wait forever *)
          let forever, _ = Lwt.wait () in
         forever)

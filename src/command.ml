@@ -35,17 +35,22 @@ type config_param =
   | Dir
   | Dbfilename
 
-type t =
-  | Ping
-  | Echo of Resp.t
-  | Get of string
-  | Set of set_params
-  | InfoReplication
-  | Replconf of replconf_command
-  | Psync of psync_params
-  | Wait of wait_params
-  | ConfigGet of config_param
-  | Keys of string
+type read
+type write
+
+type _ t =
+  | Ping : read t
+  | Echo : Resp.t -> read t
+  | Get : string -> read t
+  | Set : set_params -> write t
+  | InfoReplication : read t
+  | Replconf : replconf_command -> read t
+  | Psync : psync_params -> write t
+  | Wait : wait_params -> write t
+  | ConfigGet : config_param -> read t
+  | Keys : string -> read t
+
+type parsed_t = Read of read t | Write of write t
 
 (* Validation functions using Validation framework *)
 let validate_set_params params =
@@ -96,39 +101,39 @@ let parse_replconf = function
 let parse = function
   | Resp.Array [ Resp.BulkString cmd ]
     when String.lowercase_ascii cmd = "ping" ->
-      Ok Ping
+      Ok (Read Ping)
 
   | Resp.Array [ Resp.BulkString cmd; msg ]
     when String.lowercase_ascii cmd = "echo" ->
-      Ok (Echo msg)
+      Ok (Read (Echo msg))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString key ]
     when String.lowercase_ascii cmd = "get" ->
-      Ok (Get key)
+      Ok (Read (Get key))
 
   | Resp.Array (Resp.BulkString cmd :: Resp.BulkString key :: value :: rest)
     when String.lowercase_ascii cmd = "set" ->
       let expiry_ms, _ = parse_duration rest in
       let params = { key; value; expiry_ms } in
       (match validate_set_params params with
-       | Ok () -> Ok (Set params)
+       | Ok () -> Ok (Write (Set params))
        | Error _ as e -> e)
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString section ]
     when String.lowercase_ascii cmd = "info" ->
       if String.contains (String.lowercase_ascii section) 'r' then
-        Ok InfoReplication
+        Ok (Read InfoReplication)
       else
         Error (`MalformedCommand "INFO requires 'replication' section")
 
   | Resp.Array (Resp.BulkString cmd :: args)
     when String.lowercase_ascii cmd = "replconf" ->
-      parse_replconf args
+      parse_replconf args |> Result.map (fun cmd -> Read cmd)
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString replication_id; Resp.BulkString offset_str ]
     when String.lowercase_ascii cmd = "psync" ->
       let offset = int_of_string_opt offset_str |> Option.value ~default:(-1) in
-      Ok (Psync { replication_id; offset })
+      Ok (Write (Psync { replication_id; offset }))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString num_replicas_str; Resp.BulkString timeout_str ]
     when String.lowercase_ascii cmd = "wait" ->
@@ -136,20 +141,20 @@ let parse = function
        | Some num_replicas, Some timeout_ms ->
            let params = { num_replicas; timeout_ms } in
            (match validate_wait_params params with
-            | Ok () -> Ok (Wait params)
+            | Ok () -> Ok (Write (Wait params))
             | Error _ as e -> e)
        | _ -> Error (`MalformedCommand "WAIT requires two integer arguments"))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString subcommand; Resp.BulkString param ]
     when String.lowercase_ascii cmd = "config" && String.lowercase_ascii subcommand = "get" ->
       (match String.lowercase_ascii param with
-       | "dir" -> Ok (ConfigGet Dir)
-       | "dbfilename" -> Ok (ConfigGet Dbfilename)
+       | "dir" -> Ok (Read (ConfigGet Dir))
+       | "dbfilename" -> Ok (Read (ConfigGet Dbfilename))
        | _ -> Error (`MalformedCommand ("Unknown CONFIG parameter: " ^ param)))
 
   | Resp.Array [ Resp.BulkString cmd; Resp.BulkString pattern ]
     when String.lowercase_ascii cmd = "keys" ->
-      Ok (Keys pattern)
+      Ok (Read (Keys pattern))
 
   | Resp.Array (Resp.BulkString _cmd :: _) ->
       Error `UnknownCommand

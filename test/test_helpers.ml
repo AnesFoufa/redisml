@@ -28,115 +28,53 @@ let create_mock_channels () =
   let (ic_dummy, oc_dummy) = Lwt_io.pipe () in
   Lwt.return (ic_dummy, oc_dummy, "127.0.0.1:0")
 
-(* Execute a command synchronously for testing *)
-let exec_command cmd db ~current_time =
+(* Execute a RESP command synchronously for testing *)
+let exec_command resp_cmd db ~current_time =
   Lwt_main.run (
     let* (ic, oc, address) = create_mock_channels () in
-    let original_resp = match cmd with
-      | Codecrafters_redis.Command.Ping ->
-          Codecrafters_redis.Resp.Array [Codecrafters_redis.Resp.BulkString "PING"]
-      | Codecrafters_redis.Command.Echo msg ->
-          Codecrafters_redis.Resp.Array [Codecrafters_redis.Resp.BulkString "ECHO"; msg]
-      | Codecrafters_redis.Command.Get key ->
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "GET";
-            Codecrafters_redis.Resp.BulkString key
-          ]
-      | Codecrafters_redis.Command.Set { key; value; expiry_ms } ->
-          let base = [
-            Codecrafters_redis.Resp.BulkString "SET";
-            Codecrafters_redis.Resp.BulkString key;
-            value
-          ] in
-          let with_expiry = match expiry_ms with
-            | Some ms -> base @ [
-                Codecrafters_redis.Resp.BulkString "PX";
-                Codecrafters_redis.Resp.BulkString (string_of_int ms)
-              ]
-            | None -> base
-          in
-          Codecrafters_redis.Resp.Array with_expiry
-      | Codecrafters_redis.Command.InfoReplication ->
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "INFO";
-            Codecrafters_redis.Resp.BulkString "replication"
-          ]
-      | Codecrafters_redis.Command.Replconf rcmd ->
-          (match rcmd with
-           | Codecrafters_redis.Command.ReplconfListeningPort port ->
-               Codecrafters_redis.Resp.Array [
-                 Codecrafters_redis.Resp.BulkString "REPLCONF";
-                 Codecrafters_redis.Resp.BulkString "listening-port";
-                 Codecrafters_redis.Resp.BulkString (string_of_int port)
-               ]
-           | Codecrafters_redis.Command.ReplconfCapa capa ->
-               Codecrafters_redis.Resp.Array [
-                 Codecrafters_redis.Resp.BulkString "REPLCONF";
-                 Codecrafters_redis.Resp.BulkString "capa";
-                 Codecrafters_redis.Resp.BulkString capa
-               ]
-           | Codecrafters_redis.Command.ReplconfGetAck ->
-               Codecrafters_redis.Resp.Array [
-                 Codecrafters_redis.Resp.BulkString "REPLCONF";
-                 Codecrafters_redis.Resp.BulkString "GETACK";
-                 Codecrafters_redis.Resp.BulkString "*"
-               ])
-      | Codecrafters_redis.Command.Psync { replication_id; offset } ->
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "PSYNC";
-            Codecrafters_redis.Resp.BulkString replication_id;
-            Codecrafters_redis.Resp.BulkString (string_of_int offset)
-          ]
-      | Codecrafters_redis.Command.Wait { num_replicas; timeout_ms } ->
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "WAIT";
-            Codecrafters_redis.Resp.BulkString (string_of_int num_replicas);
-            Codecrafters_redis.Resp.BulkString (string_of_int timeout_ms)
-          ]
-      | Codecrafters_redis.Command.ConfigGet param ->
-          let param_str = match param with
-            | Codecrafters_redis.Command.Dir -> "dir"
-            | Codecrafters_redis.Command.Dbfilename -> "dbfilename"
-          in
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "CONFIG";
-            Codecrafters_redis.Resp.BulkString "GET";
-            Codecrafters_redis.Resp.BulkString param_str
-          ]
-      | Codecrafters_redis.Command.Keys pattern ->
-          Codecrafters_redis.Resp.Array [
-            Codecrafters_redis.Resp.BulkString "KEYS";
-            Codecrafters_redis.Resp.BulkString pattern
-          ]
-    in
-    (* Pattern match on database role to call appropriate handler *)
-    match db with
-    | Master master_db ->
-        let* result =
-          Codecrafters_redis.Database.handle_master_command master_db cmd
-            ~current_time
-            ~original_resp
-            ~ic
-            ~oc
-            ~address
+    match Codecrafters_redis.Command.parse resp_cmd with
+    | Error _ -> Lwt.return Codecrafters_redis.Resp.Null
+    | Ok parsed ->
+        let handle_master_result result =
+          match result with
+          | Codecrafters_redis.Database.Respond resp -> Lwt.return resp
+          | Codecrafters_redis.Database.ConnectionTakenOver ->
+              let* data = Lwt_io.read ~count:4096 ic in
+              (match Codecrafters_redis.Resp.parse data with
+               | Some (resp, _) -> Lwt.return resp
+               | None -> Lwt.return Codecrafters_redis.Resp.Null)
+          | Codecrafters_redis.Database.Silent ->
+              Lwt.return Codecrafters_redis.Resp.Null
         in
-        (match result with
-         | Codecrafters_redis.Database.Respond resp -> Lwt.return resp
-         | Codecrafters_redis.Database.ConnectionTakenOver ->
-             let* data = Lwt_io.read ~count:4096 ic in
-             (match Codecrafters_redis.Resp.parse data with
-              | Some (resp, _) -> Lwt.return resp
-              | None -> Lwt.return Codecrafters_redis.Resp.Null)
-         | Codecrafters_redis.Database.Silent ->
-             Lwt.return Codecrafters_redis.Resp.Null)
-    | Replica replica_db ->
-        Codecrafters_redis.Database.handle_replica_command replica_db cmd
-          ~current_time
+        let master_command : type a. Codecrafters_redis.Database.master Codecrafters_redis.Database.t -> a Codecrafters_redis.Command.t -> Codecrafters_redis.Resp.t Lwt.t =
+          fun master_db cmd ->
+            let* result =
+              Codecrafters_redis.Database.handle_master_command master_db cmd
+                ~current_time ~original_resp:resp_cmd ~ic ~oc ~address
+            in
+            handle_master_result result
+        in
+        match db with
+        | Master master_db ->
+            (match parsed with
+             | Codecrafters_redis.Command.Read cmd -> master_command master_db cmd
+             | Codecrafters_redis.Command.Write cmd -> master_command master_db cmd)
+        | Replica replica_db ->
+            (match parsed with
+             | Codecrafters_redis.Command.Read cmd ->
+                 Codecrafters_redis.Database.handle_replica_command replica_db cmd
+                   ~current_time
+             | Codecrafters_redis.Command.Write _ ->
+                 Lwt.return (Codecrafters_redis.Resp.SimpleError "ERR write command not allowed on replica"))
   )
 
 (* Check if database is in replica role by examining INFO output *)
 let is_replica db =
-  let result = exec_command Codecrafters_redis.Command.InfoReplication db ~current_time:0.0 in
+  let resp_cmd = Codecrafters_redis.Resp.Array [
+    Codecrafters_redis.Resp.BulkString "INFO";
+    Codecrafters_redis.Resp.BulkString "replication"
+  ] in
+  let result = exec_command resp_cmd db ~current_time:0.0 in
   match result with
   | Codecrafters_redis.Resp.BulkString info ->
       String.contains info 's' && (
@@ -149,7 +87,11 @@ let is_replica db =
 
 (* Check if database is in master role by examining INFO output *)
 let is_master db =
-  let result = exec_command Codecrafters_redis.Command.InfoReplication db ~current_time:0.0 in
+  let result = exec_command
+    (Codecrafters_redis.Resp.Array [
+      Codecrafters_redis.Resp.BulkString "INFO";
+      Codecrafters_redis.Resp.BulkString "replication"
+    ]) db ~current_time:0.0 in
   match result with
   | Codecrafters_redis.Resp.BulkString info ->
       (try

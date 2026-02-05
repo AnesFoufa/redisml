@@ -36,16 +36,25 @@ let error_to_string (err : [< Command.error | Config.error | Rdb.error ]) :
 let handle_command resp_cmd ic oc addr =
   let open Lwt.Syntax in
   match Command.parse resp_cmd with
-  | Ok cmd -> (
+  | Ok parsed -> (
       let current_time = Unix.gettimeofday () in
-      (* Pattern match on database role to call appropriate handler *)
+      let master_command : type a. Database.master Database.t -> a Command.t -> Database.command_result Lwt.t =
+        fun db cmd ->
+          Database.handle_master_command db cmd ~current_time
+            ~original_resp:resp_cmd ~ic ~oc ~address:addr
+      in
       let* result = match !database with
         | Some (Master master_db) ->
-            Database.handle_master_command master_db cmd ~current_time
-              ~original_resp:resp_cmd ~ic ~oc ~address:addr
+            (match parsed with
+             | Command.Read cmd -> master_command master_db cmd
+             | Command.Write cmd -> master_command master_db cmd)
         | Some (Replica replica_db) ->
-            let* resp = Database.handle_replica_command replica_db cmd ~current_time in
-            Lwt.return (Database.Respond resp)
+            (match parsed with
+             | Command.Read cmd ->
+                 let* resp = Database.handle_replica_command replica_db cmd ~current_time in
+                 Lwt.return (Database.Respond resp)
+             | Command.Write _ ->
+                 Lwt.return (Database.Respond (Resp.SimpleError "ERR write command not allowed on replica")))
         | None ->
             Lwt.return (Database.Respond (Resp.SimpleError "ERR database not initialized"))
       in
@@ -91,19 +100,22 @@ let () =
     (Lwt.catch
        (fun () ->
          (* Initialize database - connects replica to master if needed *)
-         let* db =
+         let init_db created_db : (running_db, Database.replica_connection_error) result Lwt.t =
            match created_db with
            | Database.CreatedMaster master_db ->
                Lwt.return (Ok (Master master_db))
            | Database.CreatedReplica replica_db ->
-               let* result = Database.connect_replica replica_db in
-               Lwt.return (Result.map (fun db -> Replica db) result)
+               Database.connect_replica replica_db
+               |> Lwt.map (Result.map (fun db -> Replica db))
          in
-         (match db with
-          | Ok running_db ->
-              database := Some running_db
-          | Error `FailedConnection ->
-              failwith (Database.replica_connection_error_to_string `FailedConnection));
+         let* running_db =
+           let* init_result = init_db created_db in
+           match init_result with
+           | Ok db -> Lwt.return db
+           | Error err ->
+               Lwt.fail_with (Database.replica_connection_error_to_string err)
+         in
+         database := Some running_db;
          let* _server = start_server () in
          (* Wait forever *)
          let forever, _ = Lwt.wait () in

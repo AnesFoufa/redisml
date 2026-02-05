@@ -72,8 +72,8 @@ let promote_disconnected_replica (db : disconnected_replica t) =
     role = ConnectedReplica state;
   }
 
-(* Execute a command and return response - works for any role *)
-let execute_command : type a. Command.t -> a t -> current_time:float -> Resp.t =
+(* Execute a command and return response - works for any role and command type *)
+let execute_command : type cmd db. cmd Command.t -> db t -> current_time:float -> Resp.t =
   fun cmd db ~current_time ->
   let storage = db.storage in
   match cmd with
@@ -152,8 +152,7 @@ let execute_command : type a. Command.t -> a t -> current_time:float -> Resp.t =
       Resp.Array (List.map (fun k -> Resp.BulkString k) keys)
 
 (* Determine if command should be propagated - master only *)
-let should_propagate_command cmd =
-  match cmd with
+let should_propagate_command : type a. a Command.t -> bool = function
   | Command.Set _ -> true
   | _ -> false
 
@@ -163,7 +162,8 @@ type command_result =
   | ConnectionTakenOver
 
 (* Handle command on master database *)
-let handle_master_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
+let handle_master_command : type a. master t -> a Command.t -> current_time:float -> original_resp:Resp.t -> ic:Lwt_io.input_channel -> oc:Lwt_io.output_channel -> address:string -> command_result Lwt.t =
+  fun db cmd ~current_time ~original_resp ~ic ~oc ~address ->
   let open Lwt.Syntax in
   let (Master replica_manager) = db.role in
   match cmd with
@@ -208,15 +208,9 @@ let handle_master_command db cmd ~current_time ~original_resp ~ic ~oc ~address =
 
       Lwt.return (Respond response)
 
-(* Handle command on connected replica database *)
-let handle_replica_command db cmd ~current_time =
-  match cmd with
-  | Command.Psync _ ->
-      Lwt.return (Resp.SimpleError "ERR PSYNC not allowed on replica")
-  | Command.Wait _ ->
-      Lwt.return (Resp.SimpleError "ERR WAIT not allowed on replica")
-  | _ ->
-      Lwt.return (execute_command cmd db ~current_time)
+(* Handle command on connected replica database - only accepts read commands *)
+let handle_replica_command (db : connected_replica t) (cmd : Command.read Command.t) ~current_time =
+  Lwt.return (execute_command cmd db ~current_time)
 
 (* Increment replication offset - connected replica only *)
 let increment_offset db bytes =
@@ -342,22 +336,26 @@ let connect_to_master ~(database : disconnected_replica t) ~host ~master_port ~r
   in
 
   (* Helper: Process commands already in buffer *)
-  let process_buffered_commands reader _ic oc =
+  let process_buffered_commands reader oc =
     Buffer_reader.process_all_buffered reader ~parser:Resp.parse ~f:(fun cmd ->
+      let cmd_bytes = String.length (Resp.serialize cmd) in
       match Command.parse cmd with
-      | Ok parsed_cmd ->
+      | Ok (Command.Read read_cmd) ->
           let current_time = Unix.gettimeofday () in
           let* resp =
-            handle_replica_command connected_db parsed_cmd ~current_time
+            handle_replica_command connected_db read_cmd ~current_time
           in
-          let cmd_bytes = String.length (Resp.serialize cmd) in
           increment_offset connected_db cmd_bytes;
-
-          (match parsed_cmd with
+          (match read_cmd with
            | Command.Replconf _ ->
                let* () = Lwt_io.write oc (Resp.serialize resp) in
                Lwt_io.flush oc
            | _ -> Lwt.return_unit)
+      | Ok (Command.Write write_cmd) ->
+          let current_time = Unix.gettimeofday () in
+          let _resp = execute_command write_cmd connected_db ~current_time in
+          increment_offset connected_db cmd_bytes;
+          Lwt.return_unit
       | Error _ -> Lwt.return_unit
     )
   in
@@ -390,7 +388,7 @@ let connect_to_master ~(database : disconnected_replica t) ~host ~master_port ~r
       Lwt.catch
         (fun () ->
           (* Process any commands already in buffer *)
-          let* () = process_buffered_commands reader ic oc in
+          let* () = process_buffered_commands reader oc in
 
           (* Read more data from master *)
           let* result = Buffer_reader.read_from_channel reader ic ~count:4096 in

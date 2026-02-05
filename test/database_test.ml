@@ -10,6 +10,18 @@ let contains_substring s sub =
     true
   with Not_found -> false
 
+(* RESP command builders *)
+let ping_cmd = Resp.Array [Resp.BulkString "PING"]
+let echo_cmd msg = Resp.Array [Resp.BulkString "ECHO"; msg]
+let get_cmd key = Resp.Array [Resp.BulkString "GET"; Resp.BulkString key]
+let set_cmd key value = Resp.Array [Resp.BulkString "SET"; Resp.BulkString key; Resp.BulkString value]
+let info_replication_cmd = Resp.Array [Resp.BulkString "INFO"; Resp.BulkString "replication"]
+let replconf_port_cmd port = Resp.Array [Resp.BulkString "REPLCONF"; Resp.BulkString "listening-port"; Resp.BulkString (string_of_int port)]
+let replconf_getack_cmd = Resp.Array [Resp.BulkString "REPLCONF"; Resp.BulkString "GETACK"; Resp.BulkString "*"]
+let psync_cmd id offset = Resp.Array [Resp.BulkString "PSYNC"; Resp.BulkString id; Resp.BulkString (string_of_int offset)]
+let config_get_cmd param = Resp.Array [Resp.BulkString "CONFIG"; Resp.BulkString "GET"; Resp.BulkString param]
+let keys_cmd pattern = Resp.Array [Resp.BulkString "KEYS"; Resp.BulkString pattern]
+
 (* Role Detection Tests *)
 let test_master_role () =
   let config = Config.default in
@@ -24,7 +36,7 @@ let test_replica_role () =
 (* Command Execution Tests *)
 let test_ping () =
   let db = Test_helpers.create_db Config.default in
-  let result = Test_helpers.exec_command Command.Ping db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command ping_cmd db ~current_time:1000.0 in
   check string "PING returns PONG"
     (Resp.serialize (Resp.SimpleString "PONG"))
     (Resp.serialize result)
@@ -32,29 +44,22 @@ let test_ping () =
 let test_echo () =
   let db = Test_helpers.create_db Config.default in
   let msg = Resp.BulkString "hello" in
-  let result = Test_helpers.exec_command (Command.Echo msg) db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (echo_cmd msg) db ~current_time:1000.0 in
   check string "ECHO returns message"
     (Resp.serialize msg)
     (Resp.serialize result)
 
 let test_set_get () =
   let db = Test_helpers.create_db Config.default in
-  let set_cmd = Command.Set {
-    key = "mykey";
-    value = Resp.BulkString "myvalue";
-    expiry_ms = None
-  } in
-  let _ = Test_helpers.exec_command set_cmd db ~current_time:1000.0 in
-  let get_cmd = Command.Get "mykey" in
-  let result = Test_helpers.exec_command get_cmd db ~current_time:1000.0 in
+  let _ = Test_helpers.exec_command (set_cmd "mykey" "myvalue") db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (get_cmd "mykey") db ~current_time:1000.0 in
   check string "GET returns SET value"
     (Resp.serialize (Resp.BulkString "myvalue"))
     (Resp.serialize result)
 
 let test_get_nonexistent () =
   let db = Test_helpers.create_db Config.default in
-  let get_cmd = Command.Get "nonexistent" in
-  let result = Test_helpers.exec_command get_cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (get_cmd "nonexistent") db ~current_time:1000.0 in
   check string "GET nonexistent returns Null"
     (Resp.serialize Resp.Null)
     (Resp.serialize result)
@@ -62,7 +67,7 @@ let test_get_nonexistent () =
 (* INFO Command Tests *)
 let test_info_master () =
   let db = Test_helpers.create_db Config.default in
-  let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command info_replication_cmd db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:master"
@@ -72,7 +77,7 @@ let test_info_master () =
 let test_info_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Test_helpers.create_db config in
-  let result = Test_helpers.exec_command Command.InfoReplication db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command info_replication_cmd db ~current_time:1000.0 in
   match result with
   | Resp.BulkString info ->
       check bool "contains role:slave"
@@ -82,8 +87,7 @@ let test_info_replica () =
 (* REPLCONF Tests *)
 let test_replconf_ok () =
   let db = Test_helpers.create_db Config.default in
-  let cmd = Command.Replconf (Command.ReplconfListeningPort 6379) in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (replconf_port_cmd 6379) db ~current_time:1000.0 in
   check string "REPLCONF returns OK"
     (Resp.serialize (Resp.SimpleString "OK"))
     (Resp.serialize result)
@@ -91,8 +95,7 @@ let test_replconf_ok () =
 let test_replconf_getack_on_replica () =
   let config = { Config.default with replicaof = Some ("localhost", 6379) } in
   let db = Test_helpers.create_db config in
-  let cmd = Command.Replconf Command.ReplconfGetAck in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command replconf_getack_cmd db ~current_time:1000.0 in
   match result with
   | Resp.Array [
       Resp.BulkString "REPLCONF";
@@ -102,12 +105,10 @@ let test_replconf_getack_on_replica () =
       check string "initial offset is 0" "0" offset
   | _ -> fail "Expected REPLCONF ACK array"
 
-(* Offset Tracking Tests *)
 (* PSYNC Tests *)
 let test_psync_response () =
   let db = Test_helpers.create_db Config.default in
-  let cmd = Command.Psync { replication_id = "?"; offset = -1 } in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (psync_cmd "?" (-1)) db ~current_time:1000.0 in
   match result with
   | Resp.SimpleString s ->
       check bool "PSYNC returns FULLRESYNC"
@@ -118,8 +119,7 @@ let test_psync_response () =
 let test_config_get_dir_with_value () =
   let config = { Config.default with dir = Some "/tmp/redis" } in
   let db = Test_helpers.create_db config in
-  let cmd = Command.ConfigGet Command.Dir in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (config_get_cmd "dir") db ~current_time:1000.0 in
   check string "CONFIG GET dir returns array with value"
     (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString "/tmp/redis"]))
     (Resp.serialize result)
@@ -127,8 +127,7 @@ let test_config_get_dir_with_value () =
 let test_config_get_dir_no_value () =
   let config = Config.default in
   let db = Test_helpers.create_db config in
-  let cmd = Command.ConfigGet Command.Dir in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (config_get_cmd "dir") db ~current_time:1000.0 in
   check string "CONFIG GET dir with no value returns array with empty string"
     (Resp.serialize (Resp.Array [Resp.BulkString "dir"; Resp.BulkString ""]))
     (Resp.serialize result)
@@ -136,8 +135,7 @@ let test_config_get_dir_no_value () =
 let test_config_get_dbfilename_with_value () =
   let config = { Config.default with dbfilename = Some "dump.rdb" } in
   let db = Test_helpers.create_db config in
-  let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (config_get_cmd "dbfilename") db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename returns array with value"
     (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString "dump.rdb"]))
     (Resp.serialize result)
@@ -145,8 +143,7 @@ let test_config_get_dbfilename_with_value () =
 let test_config_get_dbfilename_no_value () =
   let config = Config.default in
   let db = Test_helpers.create_db config in
-  let cmd = Command.ConfigGet Command.Dbfilename in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (config_get_cmd "dbfilename") db ~current_time:1000.0 in
   check string "CONFIG GET dbfilename with no value returns array with empty string"
     (Resp.serialize (Resp.Array [Resp.BulkString "dbfilename"; Resp.BulkString ""]))
     (Resp.serialize result)
@@ -154,22 +151,16 @@ let test_config_get_dbfilename_no_value () =
 (* KEYS Tests *)
 let test_keys_empty () =
   let db = Test_helpers.create_db Config.default in
-  let cmd = Command.Keys "*" in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (keys_cmd "*") db ~current_time:1000.0 in
   check string "KEYS on empty database"
     (Resp.serialize (Resp.Array []))
     (Resp.serialize result)
 
 let test_keys_with_data () =
   let db = Test_helpers.create_db Config.default in
-  let _ = Test_helpers.exec_command
-    (Command.Set { key = "foo"; value = Resp.BulkString "bar"; expiry_ms = None })
-    db ~current_time:1000.0 in
-  let _ = Test_helpers.exec_command
-    (Command.Set { key = "baz"; value = Resp.BulkString "qux"; expiry_ms = None })
-    db ~current_time:1000.0 in
-  let cmd = Command.Keys "*" in
-  let result = Test_helpers.exec_command cmd db ~current_time:1000.0 in
+  let _ = Test_helpers.exec_command (set_cmd "foo" "bar") db ~current_time:1000.0 in
+  let _ = Test_helpers.exec_command (set_cmd "baz" "qux") db ~current_time:1000.0 in
+  let result = Test_helpers.exec_command (keys_cmd "*") db ~current_time:1000.0 in
   match result with
   | Resp.Array keys ->
       check int "KEYS returns 2 keys" 2 (List.length keys)

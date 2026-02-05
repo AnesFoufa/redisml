@@ -8,7 +8,7 @@ type running_db =
 
 (* Execute a command synchronously for testing using mock channels *)
 val exec_command :
-  Codecrafters_redis.Command.t ->
+  Codecrafters_redis.Resp.t ->
   running_db ->
   current_time:float ->
   Codecrafters_redis.Resp.t

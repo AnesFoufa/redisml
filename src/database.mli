@@ -49,15 +49,12 @@ val connect_replica :
 (* Get the current configuration from any database *)
 val get_config : 'a t -> Config.t
 
-type command_result =
-  | Respond of Resp.t
-  | Silent
-  | ConnectionTakenOver
+type command_result = Respond of Resp.t | Silent | ConnectionTakenOver
 
 (* Handle commands on a master database *)
 val handle_master_command :
   master t ->
-  Command.t ->
+  'a Command.t ->
   current_time:float ->
   original_resp:Resp.t ->
   ic:Lwt_io.input_channel ->
@@ -68,6 +65,6 @@ val handle_master_command :
 (* Handle commands on a connected replica database *)
 val handle_replica_command :
   connected_replica t ->
-  Command.t ->
+  Command.read Command.t ->
   current_time:float ->
   Resp.t Lwt.t

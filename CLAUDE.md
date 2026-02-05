@@ -8,38 +8,14 @@ This is an OCaml implementation of a Redis clone built for the CodeCrafters chal
 
 ## Development Workflow
 
-**Two-Branch Strategy**: Features are developed in `with-tests` branch, then cherry-picked to `master`.
-
 ### Feature Development Cycle
 
-1. **Run CodeCrafters tests on `master`**: Identify the next failing test/stage
-2. **Switch to `with-tests` branch**: All new features start here
-3. **Write tests first**: Commit unit tests for the feature
-4. **Implement feature**: Commit the implementation separately
-5. **Merge both in `with-tests`**: Both test and feature commits stay in the test branch
-6. **Cherry-pick to `master`**: Only the feature commit gets cherry-picked to master branch
-7. **Verify with CodeCrafters**: Run tests again to confirm the stage passes
-
-This keeps `master` clean for CodeCrafters submission while maintaining comprehensive tests in `with-tests`.
-
-Example workflow:
-```bash
-# 1. Identify next failing stage
-git checkout master
-codecrafters submit  # Runs tests and shows next failing stage
-
-# 2. Develop feature with tests
-git checkout with-tests
-# Write and commit tests
-git commit -m "Add tests for feature X"
-# Implement and commit feature
-git commit -m "Implement feature X"
-
-# 3. Cherry-pick feature to master and verify
-git checkout master
-git cherry-pick <feature-commit-hash>
-codecrafters submit  # Verify stage passes
-```
+1. **Design the interface first**: Write `.mli` interface files to define module signatures
+2. **Implement the feature**: Write the implementation to satisfy the interface
+3. **Write tests**: Add unit tests for the new functionality
+4. **Run tests locally**: Run `dune runtest` to verify everything passes
+5. **Run CodeCrafters tests**: Run `codecrafters test` to check against the challenge stages
+6. **Submit only when asked**: Never run `codecrafters submit` unless explicitly requested
 
 ## Build and Development Commands
 
@@ -49,9 +25,8 @@ codecrafters submit  # Verify stage passes
 - **Run with replication**: `./your_program.sh --port 6380 --replicaof localhost 6379`
 
 ### Testing
-Tests are maintained in the `with-tests` branch (130+ tests across 4 test suites):
+130+ tests across 4 test suites using the Alcotest framework:
 ```bash
-git checkout with-tests
 dune runtest
 ```
 
@@ -60,8 +35,6 @@ Individual test suites:
 - `dune exec test/storage_test.exe` - Storage operations and expiry (21 tests)
 - `dune exec test/command_test.exe` - Command parsing (45 tests)
 - `dune exec test/database_test.exe` - Database logic (17 tests)
-
-The test suite uses Alcotest framework. Tests are kept in a separate branch to keep the main branch focused on implementation for CodeCrafters submission.
 
 ### Code Formatting
 The project uses ocamlformat. Configuration is in `.ocamlformat`.
@@ -191,7 +164,7 @@ main.ml
   └─> master_connection.ml (if replica role)
 ```
 
-## Test Structure (with-tests branch)
+## Test Structure
 
 Tests use Alcotest framework with custom testable types for RESP values:
 - **resp_test.ml**: Parsing and serialization of all RESP types, edge cases

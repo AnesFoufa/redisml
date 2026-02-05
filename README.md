@@ -56,9 +56,9 @@ The codebase is organized into focused modules:
 
 # Tests
 
-Comprehensive unit tests (130+ tests) are maintained in the `with-tests` branch to keep the main branch focused on the implementation.
+Comprehensive unit tests (130+ tests across 4 test suites) using the Alcotest framework.
 
-To run tests: `git checkout with-tests && dune runtest`
+To run tests: `dune runtest`
 
 ## Contributing Documentation
 
